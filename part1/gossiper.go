@@ -16,6 +16,7 @@ import (
 
 // go run gossiper.go -UIPort=10000 -gossipPort=5000 -name=nodeA -peers=127.0.0.1:5001_10.1.1.7:5002
 var DEBUG bool
+var RTIMER int
 var MessageQueue chan message.Message
 var WebServerReceiveChannel chan [2]string
 var WebServerSendChannel chan [2]string
@@ -72,6 +73,8 @@ func NewGossiper(name, ui_port, gossip_port, webport string,
                           AckReceiveChannel: make(chan string),
                           AckSendChannel: make(chan AckWait),
                         }
+    //Add self into the VectorTable
+    gossiper.VectorTable[name] = 1
     if DEBUG { fmt.Println("Start receiving client msg on", ui_port) }
     go ReceiveClientMessage(client_conn)
 
@@ -175,7 +178,6 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
         }
         gossiper.UpdatePeer(relay_addr)
         gossiper.PrintPacket(gossip_packet, relay_addr)
-        gossiper.PrintPeers()
         channel<-message.GossipMessage{Packet:gossip_packet,
                                        Relay_addr:relay_addr}
     }
@@ -183,6 +185,8 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
 
 func (gossiper *Gossiper)PrintPacket(packet message.GossipPacket, relay_addr string) {
     if packet.Rumor != nil {
+        // Do not print the Rumor if Text is empty.
+        if packet.Rumor.Text == "" { return }
         if relay_addr == "N/A" { fmt.Printf("CLIENT %s %s\n", packet.Rumor.Text, gossiper.Name)
         } else { fmt.Printf("RUMOR origin %s from %s ID %d contents %s\n", packet.Rumor.Origin, relay_addr, packet.Rumor.ID,
                             packet.Rumor.Text)
@@ -195,6 +199,7 @@ func (gossiper *Gossiper)PrintPacket(packet message.GossipPacket, relay_addr str
         }
         fmt.Println(status_str)
     }
+    gossiper.PrintPeers()
 }
 
 func (gossiper *Gossiper)PrintPeers() {
@@ -255,6 +260,8 @@ func (gossiper *Gossiper) SendStatus() {
         }
         if gossiper_has_new_msg {
             packet := message.GossipPacket{ Rumor: rumor_msg}
+            fmt.Println("MONGERING with "+relay_addr)
+            gossiper.PrintPeers()
             go gossiper.SendRumor(packet, relay_addr)
             //continue
         }
@@ -262,7 +269,8 @@ func (gossiper *Gossiper) SendStatus() {
         remote_has_new_msg := false
         for origin, peer_next_id := range peer_vector_map {
             next_id, ok := gossiper.VectorTable[origin]
-            if ok != true || next_id < peer_next_id {
+            if ok != true { next_id = 1 }
+            if next_id < peer_next_id {
                 remote_has_new_msg = true
                 break
             }
@@ -296,13 +304,16 @@ func (gossiper *Gossiper) GossipMessages() {
         }
 
         if packet.ID == next_id {
-            message_list := append(gossiper.RumorMessages[packet.Origin],
-                                   packet.Text)
-            gossiper.RumorMessages[packet.Origin] = message_list
-            gossiper.VectorTable[packet.Origin] += 1
+            // Update messages only if the message is non-empty.
+            if packet.Text != "" {
+                message_list := append(gossiper.RumorMessages[packet.Origin],
+                                       packet.Text)
+                gossiper.RumorMessages[packet.Origin] = message_list
+                gossiper.VectorTable[packet.Origin] += 1
+                // Notify the WebServer.
+                WebServerSendChannel<-[2]string{"NewMessage", packet.Origin+":"+packet.Text}
+            }
             gossiper.UpdateRoutingTable(channel_packet)
-            // Notify the WebServer.
-            WebServerSendChannel<-[2]string{"NewMessage", packet.Origin+":"+packet.Text}
             if DEBUG {gossiper.PrintPeers()
                       fmt.Println("RumorMessages:", gossiper.RumorMessages,
                         "Vector Table:", gossiper.VectorTable)}
@@ -328,7 +339,6 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
     packet  := channel_packet.Packet.Rumor
     gossiper.NextRoutingTable[packet.Origin] = relay_addr
     fmt.Printf("DSDV %s:%s\n", packet.Origin, relay_addr)
-
 }
 
 func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
@@ -425,20 +435,35 @@ func (gossiper *Gossiper) WaitForAck() {
 
 func (gossiper *Gossiper) AntiEntropy(){
     for {
-            timer := time.NewTimer(time.Second)
-            <-timer.C
-            var peer_map map[string]bool
-            peer_map= gossiper.PeerList
-            peer_list := []string{}
-            if len(peer_list) == 0 { continue }
-            for peer, _ := range(peer_map) { peer_list = append(peer_list, peer) }
-            peer_to_send := peer_list[rand.Intn(len(peer_list))]
-            gossiper.SendAck(peer_to_send)
-        }
+        timer := time.NewTimer(time.Second)
+        <-timer.C
+        var peer_map map[string]bool
+        peer_map= gossiper.PeerList
+        peer_list := []string{}
+        if len(peer_list) == 0 { continue }
+        for peer, _ := range(peer_map) { peer_list = append(peer_list, peer) }
+        peer_to_send := peer_list[rand.Intn(len(peer_list))]
+        gossiper.SendAck(peer_to_send)
+    }
 }
 
-
-
+func (gossiper *Gossiper) RouteRumor(){
+    for {
+        var peer_map map[string]bool
+        peer_map= gossiper.PeerList
+        peer_list := []string{}
+        for peer, _ := range(peer_map) { peer_list = append(peer_list, peer) }
+        if len(peer_list) == 0 { continue }
+        peer_to_send := peer_list[rand.Intn(len(peer_list))]
+        packet := &message.RumorMessage{Origin:gossiper.Name,
+                                        ID:gossiper.VectorTable[gossiper.Name],
+                                        Text:""}
+        gossiper.SendRumor(message.GossipPacket{ Rumor: packet},
+                           peer_to_send)
+        timer := time.NewTimer(time.Duration(RTIMER)*time.Second)
+        <-timer.C
+    }
+}
 func (gossiper *Gossiper) Close() {
     gossiper.UIConn.Close()
     gossiper.GossipConn.Close()
@@ -454,6 +479,7 @@ func main() {
     var peers = flag.String("peers", "",
                     "List of peers in the form <ip>:port separated by an underscore")
     var webport = flag.String("webport", "8080", "Port for local web client")
+    var rtimer = flag.Int("rtimer", 60, "Number of seconds to wait between 2 rumor messsages")
     flag.Parse()
 
     rand.Seed(time.Now().UTC().UnixNano())
@@ -461,6 +487,7 @@ func main() {
     MessageQueue = make(chan message.Message)
     WebServerReceiveChannel = make(chan [2]string)
     WebServerSendChannel = make(chan [2]string)
+    RTIMER = *rtimer
     var peer_list []string
     if *peers == "" { peer_list = []string{}
     } else { peer_list = strings.Split(*peers, "_") }
@@ -472,5 +499,6 @@ func main() {
     go gossiper.SendStatus()
     go gossiper.WaitForAck()
     go gossiper.AntiEntropy()
+    go gossiper.RouteRumor()
     gossiper.GossipMessages()
 }
