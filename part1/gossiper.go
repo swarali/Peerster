@@ -10,13 +10,15 @@ import (
     "time"
 
     "github.com/dedis/protobuf"
-    "github.com/JohnDoe/Peerster/part3/message"
-    "github.com/JohnDoe/Peerster/part3/webserver"
+    "github.com/Swarali/Peerster/part1/message"
+    "github.com/Swarali/Peerster/part1/webserver"
     )
 
 // go run gossiper.go -UIPort=10000 -gossipPort=5000 -name=nodeA -peers=127.0.0.1:5001_10.1.1.7:5002
 var DEBUG bool
 var MessageQueue chan message.Message
+var WebServerReceiveChannel chan [2]string
+var WebServerSendChannel chan [2]string
 
 func ListenOn(address string) *net.UDPConn {
     udpAddr, _ := net.ResolveUDPAddr("udp", address)
@@ -44,7 +46,7 @@ type Gossiper struct {
     AckSendChannel chan AckWait
 }
 
-func NewGossiper(name, ui_port, gossip_port string,
+func NewGossiper(name, ui_port, gossip_port, webport string,
                  peer_list []string) *Gossiper {
 
     peer_list_map := make(map[string]bool)
@@ -69,11 +71,14 @@ func NewGossiper(name, ui_port, gossip_port string,
                           AckReceiveChannel: make(chan string),
                           AckSendChannel: make(chan AckWait),
                         }
-    if DEBUG { fmt.Println("Start receiving on", ui_port) }
+    if DEBUG { fmt.Println("Start receiving client msg on", ui_port) }
     go ReceiveClientMessage(client_conn)
 
-    if DEBUG { fmt.Println("Start receiving on", gossip_port) }
+    if DEBUG { fmt.Println("Start receiving gossip msg on", gossip_port) }
     go ReceiveGossipMessage(gossip_conn)
+
+    if DEBUG { fmt.Println("Start receiving webclient msg on", webport) }
+    go ReceiveWebClientMessage(name, peer_list, webport)
 
     go gossiper.ProcessMessageQueue()
     return gossiper
@@ -102,7 +107,6 @@ func ReceiveGossipMessage(conn *net.UDPConn) {
 }
 
 func ReceiveClientMessage(conn *net.UDPConn) {
-
     if DEBUG { fmt.Println("Receive messages on", conn) }
     for {
         packet := &message.ClientMessage{}
@@ -121,6 +125,23 @@ func ReceiveClientMessage(conn *net.UDPConn) {
     }
 }
 
+func ReceiveWebClientMessage(name string, peer_list []string, webport string) {
+    webserver.WebServerReceiveChannel = WebServerReceiveChannel
+    webserver.WebServerSendChannel = WebServerSendChannel
+    go webserver.StartWebServer(name, peer_list, webport)
+    for message_from_webclient := range WebServerReceiveChannel {
+        operation := message_from_webclient[0]
+        msg := message_from_webclient[1]
+        client_msg := message.ClientMessage{}
+        if operation == "NewID" {
+            client_msg.ID = msg
+        } else if operation == "NewMessage" {
+            client_msg.Text = msg
+        } else if operation == "NewPeer" {
+            client_msg.Peer = msg }
+        MessageQueue<-message.Message{ClientMsg:&client_msg}
+    }
+}
 func (gossiper *Gossiper) ProcessMessageQueue() {
     for msg := range MessageQueue {
         var gossip_packet message.GossipPacket
@@ -137,9 +158,11 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
         } else {
             if msg.ClientMsg.ID != "" {
                 gossiper.Name = msg.ClientMsg.ID
+                WebServerSendChannel<-[2]string{"NewID", msg.ClientMsg.ID}
                 continue
             } else if msg.ClientMsg.Peer != "" {
                 gossiper.UpdatePeer(msg.ClientMsg.Peer)
+                WebServerSendChannel<-[2]string{"NewPeer", msg.ClientMsg.Peer}
                 continue
             } else {
                 gossip_packet = message.GossipPacket{}
@@ -277,7 +300,8 @@ func (gossiper *Gossiper) GossipMessages() {
                                    packet.Message.Text)
             gossiper.Messages[packet.Origin] = message_list
             gossiper.VectorTable[packet.Origin] += 1
-
+            // Notify the WebServer.
+            WebServerSendChannel<-[2]string{"NewMessage", packet.Origin+":"+packet.Message.Text}
             if DEBUG {gossiper.PrintPeers()
                       fmt.Println("Messages:", gossiper.Messages,
                         "Vector Table:", gossiper.VectorTable)}
@@ -326,19 +350,6 @@ func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
         }
         gossiper.SendRumor(packet, peer_to_send)
 
-        if (rand.Int() % 2) == 0 { break }
-        flipped_coin = true
-    }
-}
-
-func (gossiper *Gossiper)SendRumor(packet message.GossipPacket,
-                                   peer_to_send string) {
-    for {
-        if DEBUG { fmt.Println("Peer to send is ", peer_to_send) }
-        packetBytes, _ := protobuf.Encode(&packet)
-        udpAddr, _ := net.ResolveUDPAddr("udp", peer_to_send)
-        gossiper.GossipConn.WriteToUDP(packetBytes, udpAddr)
-
         // Wait for ack or timeout
         timer := time.NewTimer(time.Second)
         ack_wait := make(chan bool, 1)
@@ -350,12 +361,22 @@ func (gossiper *Gossiper)SendRumor(packet message.GossipPacket,
             case <-ack_wait:
                 // Stop rumormongering
                 if DEBUG { fmt.Println("Ack received") }
-                return
             case <-timer.C:
                 if DEBUG { fmt.Println("Timeout") }
                 // On timeout resend the packet 
         }
+
+        if (rand.Int() % 2) == 0 { break }
+        flipped_coin = true
     }
+}
+
+func (gossiper *Gossiper)SendRumor(packet message.GossipPacket,
+                                   peer_to_send string) {
+    if DEBUG { fmt.Println("Peer to send is ", peer_to_send) }
+    packetBytes, _ := protobuf.Encode(&packet)
+    udpAddr, _ := net.ResolveUDPAddr("udp", peer_to_send)
+    gossiper.GossipConn.WriteToUDP(packetBytes, udpAddr)
 }
 
 func (gossiper *Gossiper) WaitForAck() {
@@ -397,30 +418,6 @@ func (gossiper *Gossiper) AntiEntropy(){
         }
 }
 
-func (gossiper *Gossiper) StartWebServer() {
-
-    get_channel := make(chan chan bool)
-    post_channel := make(chan [2]string)
-    index_page := &webserver.Page{}
-    go webserver.StartWebServer(get_channel, post_channel, index_page)
-    for {
-        select {
-            case get_request := <-get_channel:
-                var peer_list  map[string]bool
-                peer_list= gossiper.PeerList
-                webserver.IndexPage = &webserver.Page{Name:gossiper.Name, Peers: peer_list, Messages: gossiper.Messages}
-                get_request<-true
-            case post_request := <-post_channel:
-                client_msg := message.ClientMessage{}
-                key := post_request[0]
-                val := post_request[1]
-                if key == "ID" { client_msg.ID = val
-                } else if key == "Text" {client_msg.Text = val
-                } else { client_msg.Peer = val }
-                MessageQueue<-message.Message{ClientMsg:&client_msg}
-        }
-    }
-}
 
 
 func (gossiper *Gossiper) Close() {
@@ -437,26 +434,24 @@ func main() {
     var name = flag.String("name", "", "Name of the current host")
     var peers = flag.String("peers", "",
                     "List of peers in the form <ip>:port separated by an underscore")
+    var webport = flag.String("webport", "8080", "Port for local web client")
     flag.Parse()
 
-    DEBUG=false
     rand.Seed(time.Now().UTC().UnixNano())
+    DEBUG=false
     MessageQueue = make(chan message.Message)
+    WebServerReceiveChannel = make(chan [2]string)
+    WebServerSendChannel = make(chan [2]string)
     var peer_list []string
     if *peers == "" { peer_list = []string{}
     } else { peer_list = strings.Split(*peers, "_") }
 
     //fmt.Println(*ui_port, *gossipPort, *name, peer_list)
-    gossiper := NewGossiper(*name, *ui_port, *gossipPort, peer_list)
+    gossiper := NewGossiper(*name, *ui_port, *gossipPort, *webport, peer_list)
     defer gossiper.Close()
 
     go gossiper.SendStatus()
     go gossiper.WaitForAck()
     go gossiper.AntiEntropy()
-    messages := make(map[string][]string)
-    messages["A"] = []string{"aaa", "deeqerq"}
-    messages["B"] = []string{"hhhh", "qwrqrq"}
-    //messages := map[string][]string{"A":["aaaa","aa"]}
-    go gossiper.StartWebServer()
     gossiper.GossipMessages()
 }

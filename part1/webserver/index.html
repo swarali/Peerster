@@ -9,7 +9,7 @@ $(document).ready(function(){
             type: "POST",
             contentType: "application/x-www-form-urlencoded",
             dataType: "json",
-            data: {ID: $("#name").val()}
+            data: {NewID: $("#name").val()}
         });
         $("#name").val('').attr('value','')
     });
@@ -20,7 +20,7 @@ $(document).ready(function(){
             type: "POST",
             contentType: "application/x-www-form-urlencoded",
             dataType: "json",
-            data: {Peer: $("#peer").val()}
+            data: {NewPeer: $("#peer").val()}
         });
         $("#peer").val('').attr('value','')
     });
@@ -31,7 +31,7 @@ $(document).ready(function(){
             type: "POST",
             contentType: "application/x-www-form-urlencoded",
             dataType: "json",
-            data: {Text: $("#msg").val()}
+            data: {NewMessage: $("#msg").val()}
         });
         $("#msg").val('').attr('value','')
     });
@@ -51,7 +51,7 @@ Peer ID: <strong>{{.Name}}</strong><br>
 <div>
 <h2>Peer Box</h2>
 Peers: <strong>{{ range $key, $value := .Peers }}
-    {{ $key }},
+    {{ $value }},
 {{ end }}</strong><br>
     <input id="peer" type="text" name="peer">
     <input id="peerbtn" type="submit" value="Add Peer">
@@ -61,7 +61,7 @@ Peers: <strong>{{ range $key, $value := .Peers }}
     <input id="msg" type="text" name="message">
     <input id="msgbtn" type="submit" value="Add Message"><br>
 {{ range $key, $value := .Messages }}
-   <li><strong>{{ $key }}</strong>: {{ $value }}</li>
+   <li>{{ $value }}</li>
 {{ end }}
 </div>
 </body>
