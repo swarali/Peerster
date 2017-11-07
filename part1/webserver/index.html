@@ -1,0 +1,67 @@
+<head>
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.4.2/jquery.min.js"></script>
+<script>
+$(document).ready(function(){
+    $("#namebtn").click(function(){
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {ID: $("#name").val()}
+        });
+        $("#name").val('').attr('value','')
+    });
+    $("#peerbtn").click(function(){
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {Peer: $("#peer").val()}
+        });
+        $("#peer").val('').attr('value','')
+    });
+    $("#msgbtn").click(function(){
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {Text: $("#msg").val()}
+        });
+        $("#msg").val('').attr('value','')
+    });
+});
+</script>
+<meta http-equiv="refresh" content="20" />
+</head>
+<body>
+<h1>Welcome to Peerster!</h1>
+<div>
+<h2>ID Box</h2>
+Peer ID: <strong>{{.Name}}</strong><br>
+    <input id="name" type="text" name="name">
+    <input id="namebtn" type="submit" value="Change ID">
+</div>
+
+<div>
+<h2>Peer Box</h2>
+Peers: <strong>{{ range $key, $value := .Peers }}
+    {{ $key }},
+{{ end }}</strong><br>
+    <input id="peer" type="text" name="peer">
+    <input id="peerbtn" type="submit" value="Add Peer">
+</div>
+<div>
+<h2>Chat Box</h2>
+    <input id="msg" type="text" name="message">
+    <input id="msgbtn" type="submit" value="Add Message"><br>
+{{ range $key, $value := .Messages }}
+   <li><strong>{{ $key }}</strong>: {{ $value }}</li>
+{{ end }}
+</div>
+</body>
