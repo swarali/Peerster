@@ -430,6 +430,7 @@ func (gossiper *Gossiper) AntiEntropy(){
             var peer_map map[string]bool
             peer_map= gossiper.PeerList
             peer_list := []string{}
+            if len(peer_list) == 0 { continue }
             for peer, _ := range(peer_map) { peer_list = append(peer_list, peer) }
             peer_to_send := peer_list[rand.Intn(len(peer_list))]
             gossiper.SendAck(peer_to_send)
@@ -447,7 +448,7 @@ func main() {
     // Parse the flags.
     var ui_port = flag.String("UIPort", "",
                     "UI Port where the gossip program listens")
-    var gossipPort = flag.String("gossipPort", "",
+    var gossipPort = flag.String("gossipAddr", "",
                     "Address for the current gossiper")
     var name = flag.String("name", "", "Name of the current host")
     var peers = flag.String("peers", "",
