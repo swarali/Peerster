@@ -1,13 +1,14 @@
 package message
 
-type PeerMessage struct {
-    ID uint32
-    Text string
-}
-
+import (
+    "net"
+    )
 type RumorMessage struct {
     Origin string
-    Message PeerMessage
+    ID uint32
+    Text string
+    LastIP *net.IP
+    LastPort *int
 }
 
 type PeerStatus struct {
@@ -19,9 +20,18 @@ type StatusPacket struct {
     Want []PeerStatus
 }
 
+type PrivateMessage struct {
+    Origin      string
+    ID          uint32
+    Text        string
+    Destination string
+    HopLimit    uint32
+}
+
 type GossipPacket struct {
     Rumor *RumorMessage
     Status *StatusPacket
+    Private *PrivateMessage
 }
 
 type GossipMessage struct {
