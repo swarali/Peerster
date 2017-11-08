@@ -40,7 +40,10 @@ type GossipMessage struct {
 }
 
 type ClientMessage struct {
-    ID, Text, Peer string
+    Operation string
+    Message string
+    Destination string
+    Origin string
 }
 type Message struct {
     GossipMsg *GossipMessage

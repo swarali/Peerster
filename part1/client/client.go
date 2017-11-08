@@ -16,31 +16,24 @@ func main() {
                            "UI Port where the gossip program listens")
 	var msg = flag.String("msg", "",
                           "Message sent from client to the server")
+    var dest = flag.String("Dest", "", "Destination node for private message")
 	flag.Parse()
 	// fmt.Println(*msg, *ui_port)
 	destination_addr := "127.0.0.1:" + strconv.Itoa(*ui_port)
 	con, _ := net.Dial("udp", destination_addr)
 	defer con.Close()
 
-    msg_proto := &message.ClientMessage{ Text: *msg }
-	//msg_proto := &message.Message{ Origin_name: "N/A",
-    //                               Text: *msg}
-	packetBytes,_ :=protobuf.Encode(msg_proto)
+    var msg_proto *message.ClientMessage
+    if *dest != "" {
+        msg_proto = &message.ClientMessage{ Operation: "NewPrivateMessage", Message: *msg, Destination: *dest }
+    } else {
+        msg_proto = &message.ClientMessage{ Operation: "NewMessage", Message: *msg }
+    }
+    packetBytes,_ :=protobuf.Encode(msg_proto)
 
-	fmt.Println("Sending message", msg_proto.Text)
+	fmt.Println("Sending message", msg_proto.Message)
 	_, err := con.Write(packetBytes)
 	if err != nil {
 		fmt.Println(err)
 	}
-	// for i := 0; i<10; i++ {
-		// fmt.Println("Sending message ", i)
-		// message := fmt.Sprintf("%s %d", *msg, i)
-		// message = "Hello"
-		// write_buf := []byte(message)
-		// _, err := con.Write(write_buf)
-		// if err != nil {
-			// fmt.Println(err)
-		// }
-	// }
-
 }

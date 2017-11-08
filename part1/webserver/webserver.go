@@ -1,19 +1,24 @@
 package webserver
 
 import (
+    "fmt"
     "html/template"
     "net/http"
+
+    "github.com/Swarali/Peerster/part1/message"
 )
 
 type Page struct {
     Name string
     Peers []string
     Messages []string
+    PrivateMessages map[string][]string
+    KnownRoutes []string
 }
 
 var IndexPage *Page
-var WebServerSendChannel chan [2]string
-var WebServerReceiveChannel chan [2]string
+var WebServerSendChannel chan message.ClientMessage
+var WebServerReceiveChannel chan message.ClientMessage
 
 func index_handler(w http.ResponseWriter, r *http.Request) {
     //title := "Welcome to Peerster"
@@ -29,17 +34,23 @@ func index_handler(w http.ResponseWriter, r *http.Request) {
 
 func handler(w http.ResponseWriter, r *http.Request) {
     r.ParseForm()
-    //fmt.Println(r.Form)
-    //msg := message.ClientMessage{}
+    fmt.Println(r.Form)
+    msg := message.ClientMessage{}
     for k,v := range r.Form {
-        //fmt.Println("client_msg:",k, v)
-        WebServerReceiveChannel<-[2]string{k, v[0]}
+        if k == "Operation" {
+            msg.Operation = v[0]
+        } else if k == "Message" {
+            msg.Message = v[0]
+        } else if k == "Destination" {
+            msg.Destination = v[0]
+        }
     }
+    WebServerReceiveChannel<-msg
 }
 
 func StartWebServer(name string, peer_list []string,
                     webport string) {
-    IndexPage = &Page{Name: name, Peers: peer_list}
+    IndexPage = &Page{Name: name, Peers: peer_list, PrivateMessages: make(map[string][]string)}
     //fmt.Println("Starting Web Server")
     http.HandleFunc("/", index_handler)
     http.HandleFunc("/id", handler)
@@ -48,14 +59,26 @@ func StartWebServer(name string, peer_list []string,
     go http.ListenAndServe(":"+webport, nil)
 
     for message_to_webclient := range WebServerSendChannel {
-        operation := message_to_webclient[0]
-        msg := message_to_webclient[1]
-        if operation == "NewMessage" {
-            IndexPage.Messages = append([]string{msg}, IndexPage.Messages...)
-        } else if operation == "NewPeer" {
+        operation := message_to_webclient.Operation
+        msg := message_to_webclient.Message
+        if operation == "NewPeer" {
             IndexPage.Peers = append(IndexPage.Peers, msg)
         } else if operation == "NewID" {
             IndexPage.Name = msg
+        } else if operation == "NewMessage" {
+            origin := message_to_webclient.Origin
+            IndexPage.Messages = append([]string{origin+":"+msg},
+                                        IndexPage.Messages...)
+        } else if operation == "NewPrivateMessage" {
+            if message_to_webclient.Origin != "" {
+                origin := message_to_webclient.Origin
+                IndexPage.PrivateMessages[origin] = append([]string{origin+":"+msg}, IndexPage.PrivateMessages[origin]...)
+            } else if message_to_webclient.Destination != "" {
+                destination := message_to_webclient.Destination
+                IndexPage.PrivateMessages[destination] = append([]string{IndexPage.Name+":"+msg}, IndexPage.PrivateMessages[destination]...)
+            }
+        }else if operation == "NewRoute" {
+            IndexPage.KnownRoutes = append(IndexPage.KnownRoutes, msg)
         }
     }
 }
