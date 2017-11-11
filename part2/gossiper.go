@@ -453,7 +453,7 @@ func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
 
 func (gossiper *Gossiper)SendGossip(packet message.GossipPacket,
                                     peer_to_send string) {
-    if DEBUG { fmt.Println("Peer to send is ", peer_to_send) }
+    if DEBUG { fmt.Println("Peer to send is ", peer_to_send, "Packet to send", packet) }
     packetBytes, _ := protobuf.Encode(&packet)
     udpAddr, _ := net.ResolveUDPAddr("udp", peer_to_send)
     gossiper.GossipConn.WriteToUDP(packetBytes, udpAddr)
@@ -574,7 +574,7 @@ func main() {
     flag.Parse()
 
     rand.Seed(time.Now().UTC().UnixNano())
-    DEBUG=false
+    DEBUG=true
     HOPLIMIT = 10
     MessageQueue = make(chan message.Message)
     WebServerReceiveChannel = make(chan message.ClientMessage)
