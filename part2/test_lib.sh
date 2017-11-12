@@ -118,7 +118,7 @@ sendmsg(){
   local node=$1
   shift
   local msg="$@"
-  docker exec $node /root/client -msg="$msg"
+  docker exec $node /root/client -msg="$msg" -UIPort=10001
 }
 
 sendpriv(){
@@ -126,7 +126,7 @@ sendpriv(){
 	local dst=$2
   shift 2
   local msg="$@"
-  docker exec $node /root/client -msg="$msg" -Dest=$dst
+  docker exec $node /root/client -msg="$msg" -Dest=$dst -UIPort=10001
 }
 
 for p in "$@"; do
