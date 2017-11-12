@@ -17,3 +17,5 @@ Organisation of files:
         -client
             -client.go
         -Modified gossiper.sh & test_lib.sh to run the tests successfully
+
+# For mounting disk on VM use 'sudo mount -t vboxsf -o uid=$UID,gid=$(id -g) swarali /home/cs438/swarali'
