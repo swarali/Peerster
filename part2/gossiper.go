@@ -338,7 +338,6 @@ func (gossiper *Gossiper) GossipMessages() {
             fmt.Println("Packet:", packet.Origin, packet.ID, packet.Text, *packet.LastIP, *packet.LastPort)
         }
 
-
         next_id, ok := gossiper.VectorTable[packet.Origin]
         if !ok {
             //gossiper.RumorMessages[packet.Origin] = make(string[])
@@ -428,6 +427,7 @@ func (gossiper *Gossiper) GossipPrivateMessages() {
 func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessage) {
     relay_addr := channel_packet.Relay_addr
     packet  := channel_packet.Packet.Rumor
+    if relay_addr == "N/A" { return }
     if DEBUG { fmt.Println("Received Route rumor about ", packet.Origin, " from ", relay_addr) }
     next_seq, ok := gossiper.NextRoutingSeq[packet.Origin]
     is_direct:=false
@@ -446,7 +446,7 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
             if !ok {
                 WebServerSendChannel<-message.ClientMessage{Operation: "NewRoute", Message: packet.Origin}
             }
-            fmt.Printf("DSDV %s:%s\n", packet.Origin, relay_addr)
+            fmt.Printf("DSDV %s: %s\n", packet.Origin, relay_addr)
         }
     }
 }

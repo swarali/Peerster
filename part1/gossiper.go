@@ -44,6 +44,7 @@ type Gossiper struct {
     PrivateChannel chan message.GossipMessage
     VectorTable map[string]uint32
     NextRoutingTable map[string]string
+    NextRoutingSeq map[string]uint32
     RumorMessages map[string][]string
     PrivateMessages map[string][]string
     PeerList map[string]bool
@@ -69,6 +70,7 @@ func NewGossiper(name, ui_port, gossip_port, webport string,
                           PrivateChannel: make(chan message.GossipMessage),
                           VectorTable: make(map[string]uint32),
                           NextRoutingTable: make(map[string]string),
+                          NextRoutingSeq: make(map[string]uint32),
                           RumorMessages: make(map[string][]string),
                           PrivateMessages: make(map[string][]string),
                           PeerList: peer_list_map,
@@ -390,14 +392,19 @@ func (gossiper *Gossiper) GossipPrivateMessages() {
 
 func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessage) {
     relay_addr := channel_packet.Relay_addr
-    if relay_addr != "N/A" {
-        packet  := channel_packet.Packet.Rumor
-        _, ok := gossiper.NextRoutingTable[packet.Origin]
-        gossiper.NextRoutingTable[packet.Origin] = relay_addr
-        if !ok {
-            WebServerSendChannel<-message.ClientMessage{Operation: "NewRoute", Message: packet.Origin}
+    packet  := channel_packet.Packet.Rumor
+    if DEBUG { fmt.Println("Received Route rumor about ", packet.Origin, " from ", relay_addr) }
+    next_seq, ok := gossiper.NextRoutingSeq[packet.Origin]
+    if !ok || (next_seq <= packet.ID) {
+        gossiper.NextRoutingSeq[packet.Origin] = packet.ID
+        if relay_addr != "N/A" {
+            _, ok := gossiper.NextRoutingTable[packet.Origin]
+            gossiper.NextRoutingTable[packet.Origin] = relay_addr
+            if !ok {
+                WebServerSendChannel<-message.ClientMessage{Operation: "NewRoute", Message: packet.Origin}
+            }
+            fmt.Printf("DSDV %s: %s\n", packet.Origin, relay_addr)
         }
-        fmt.Printf("DSDV %s:%s\n", packet.Origin, relay_addr)
     }
 }
 
