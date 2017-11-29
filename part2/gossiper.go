@@ -432,7 +432,7 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
     next_seq, ok := gossiper.NextRoutingSeq[packet.Origin]
     is_direct:=false
     if next_seq == packet.ID {
-        if packet.LastIP == nil && packet.LastPort == nil {
+        if packet.LastIP == nil && packet.LastPort == nil && (!ok || (next_seq <= packet.ID)) {
             is_direct=true
         }
     }
