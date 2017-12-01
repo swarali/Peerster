@@ -17,6 +17,8 @@ func main() {
 	var msg = flag.String("msg", "",
                           "Message sent from client to the server")
     var dest = flag.String("Dest", "", "Destination node for private message")
+    var file = flag.String("file", "", "Name of the file to share")
+
 	flag.Parse()
 	// fmt.Println(*msg, *ui_port)
 	destination_addr := "127.0.0.1:" + strconv.Itoa(*ui_port)
@@ -26,6 +28,8 @@ func main() {
     var msg_proto *message.ClientMessage
     if *dest != "" {
         msg_proto = &message.ClientMessage{ Operation: "NewPrivateMessage", Message: *msg, Destination: *dest }
+    } else if *file != "" {
+        msg_proto = &message.ClientMessage{ Operation: "NewFileUpload", Message: *file}
     } else {
         msg_proto = &message.ClientMessage{ Operation: "NewMessage", Message: *msg }
     }

@@ -1,6 +1,7 @@
 package webserver
 
 import (
+    "encoding/hex"
     "fmt"
     "html/template"
     "net/http"
@@ -14,6 +15,7 @@ type Page struct {
     Messages []string
     PrivateMessages map[string][]string
     KnownRoutes []string
+    UploadedFiles []string
 }
 
 var IndexPage *Page
@@ -43,6 +45,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
             msg.Message = v[0]
         } else if k == "Destination" {
             msg.Destination = v[0]
+        } else if k == "Hash" {
+            msg.HashValue, _ = hex.DecodeString(v[0])
         }
     }
     WebServerReceiveChannel<-msg
@@ -77,8 +81,10 @@ func StartWebServer(name string, peer_list []string,
                 destination := message_to_webclient.Destination
                 IndexPage.PrivateMessages[destination] = append([]string{IndexPage.Name+":"+msg}, IndexPage.PrivateMessages[destination]...)
             }
-        }else if operation == "NewRoute" {
+        } else if operation == "NewRoute" {
             IndexPage.KnownRoutes = append(IndexPage.KnownRoutes, msg)
+        } else if operation == "NewFileUpload" {
+            IndexPage.UploadedFiles = append(IndexPage.UploadedFiles, msg)
         }
     }
 }

@@ -70,6 +70,37 @@ $(document).ready(function(){
             }
         }
     });
+    $("#fileuploadbtn").click(function () {
+        var file_upload = document.getElementById("fileupload")
+        alert(fileupload.files)
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {Operation: "NewFileUpload",
+                   Message: fileupload.files[0].name}
+        });
+        fileupload.value = ""
+        alert($(fileupload.files))
+        //console.dir(this.files)
+    });
+    $("#filedwldbtn").click(function () {
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {Operation: "NewFileDownload",
+                   Message: $("#filedwldname").val(),
+                   Destination: $("#filedwldpeer").val(),
+                   Hash: $("#filedwldhash").val()}
+        });
+        $("#filedwldname").val('').attr('value','')
+        $("#filedwldhash").val('').attr('value','')
+    });
 });
 </script>
 <style>
@@ -80,7 +111,7 @@ $(document).ready(function(){
     width: 200px;
 }
 </style>
-<meta http-equiv="refresh" content="20" />
+<meta http-equiv="refresh" content="60" />
 </head>
 <body>
 <h1>Welcome to Peerster!</h1>
@@ -128,6 +159,27 @@ Peers: <strong>{{ range $key, $value := .Peers }}
         {{ end }}
         </ul>
     {{end}}
-
+</div>
+<div>
+<h2>File Sharing</h2>
+    <input class="webinput" id="fileupload" type="file" name="message">
+    <input class="webbtn" id="fileuploadbtn" type="submit" value="Share File"><br>
+</div>
+<div>
+<h2>File Download</h2>
+    <select class="webinput" id="filedwldpeer" >
+        <option value="" selected="selected" hidden>File Source</option>
+        {{ range $key, $value := .KnownRoutes}}
+        <option value="{{$value}}">{{ $value}}</option>
+        {{ end }}
+    </select>
+    <input class="webbtn" id="filedwldname" type="text" ><br>
+    <input class="webinput" id="filedwldhash" type="text" name="message">
+    <input class="webbtn" id="filedwldbtn" type="submit" value="Download File"><br>
+    <ul>
+    {{ range $key, $value := .UploadedFiles }}
+       <li>{{ $value }}</li>
+    {{ end }}
+    </ul>
 </div>
 </body>

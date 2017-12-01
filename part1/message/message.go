@@ -28,10 +28,29 @@ type PrivateMessage struct {
     HopLimit    uint32
 }
 
+type DataRequest struct {
+    Origin string
+    Destination string
+    HopLimit uint32
+    FileName string
+    HashValue []byte
+}
+
+type DataReply struct {
+    Origin string
+    Destination string
+    HopLimit uint32
+    FileName string
+    HashValue []byte
+    Data []byte
+}
+
 type GossipPacket struct {
     Rumor *RumorMessage
     Status *StatusPacket
     Private *PrivateMessage
+    Request *DataRequest
+    Reply *DataReply
 }
 
 type GossipMessage struct {
@@ -44,6 +63,7 @@ type ClientMessage struct {
     Message string
     Destination string
     Origin string
+    HashValue []byte
 }
 type Message struct {
     GossipMsg *GossipMessage
