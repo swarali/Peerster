@@ -11,6 +11,7 @@ import (
     "os"
     "os/signal"
     "path/filepath"
+    "regexp"
     "strings"
     "strconv"
     "syscall"
@@ -31,6 +32,8 @@ var UI_PORT string
 var GOSSIP_PORT string
 var CHUNK_SIZE int64
 var SHARING_DIRECTORY string
+var BUDGET_THRESHOLD int
+var MATCH_THRESHOLD int
 var MessageQueue chan message.Message
 var WebServerReceiveChannel chan message.ClientMessage
 var WebServerSendChannel chan message.ClientMessage
@@ -58,6 +61,22 @@ type UploadedFile struct {
     MetaHash []byte
 }
 
+type SRequestReceive struct {
+    SRequest *message.SearchRequest
+    IsDuplicate chan bool
+}
+
+
+type SReplyReceive struct {
+    Origin string
+    SReply *message.SearchResult
+}
+
+type SReplyWait struct {
+    Key_words []string
+    SReply_wait chan SReplyReceive
+    Close bool}
+
 type Gossiper struct {
     Name string
     UIConn *net.UDPConn
@@ -67,6 +86,8 @@ type Gossiper struct {
     PrivateChannel chan message.GossipMessage
     RequestChannel chan message.GossipMessage
     ReplyChannel chan message.GossipMessage
+    SRequestChannel chan message.GossipMessage
+    SReplyChannel chan message.GossipMessage
     VectorTable map[string]uint32
     NextRoutingTable map[string]string
     NextRoutingSeq map[string]uint32
@@ -79,6 +100,10 @@ type Gossiper struct {
     AckSendChannel chan AckWait
     ReplyWaitChannel chan ReplyWait
     ReplyReceiveChannel chan *message.DataReply
+    SRequestReceiveChannel chan SRequestReceive
+    SRequestWaitChannel chan *message.SearchRequest
+    SReplyWaitChannel chan SReplyWait
+    SReplyReceiveChannel chan SReplyReceive
 }
 
 func NewGossiper(name, webport string,
@@ -97,6 +122,8 @@ func NewGossiper(name, webport string,
                           PrivateChannel: make(chan message.GossipMessage),
                           RequestChannel: make(chan message.GossipMessage),
                           ReplyChannel: make(chan message.GossipMessage),
+                          SRequestChannel: make(chan message.GossipMessage),
+                          SReplyChannel: make(chan message.GossipMessage),
                           VectorTable: make(map[string]uint32),
                           NextRoutingTable: make(map[string]string),
                           NextRoutingSeq: make(map[string]uint32),
@@ -109,6 +136,10 @@ func NewGossiper(name, webport string,
                           AckSendChannel: make(chan AckWait),
                           ReplyWaitChannel: make(chan ReplyWait),
                           ReplyReceiveChannel: make(chan *message.DataReply),
+                          SRequestReceiveChannel: make(chan SRequestReceive),
+                          SRequestWaitChannel: make(chan *message.SearchRequest),
+                          SReplyWaitChannel: make(chan SReplyWait),
+                          SReplyReceiveChannel: make(chan SReplyReceive),
                         }
     //Add self into the VectorTable
     gossiper.VectorTable[name] = 1
@@ -204,6 +235,12 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
             } else if gossip_packet.Reply != nil {
                 gossip_packet.Reply.HopLimit-=1
                 channel = gossiper.ReplyChannel
+            } else if gossip_packet.SRequest != nil {
+                gossip_packet.SRequest.Budget -=1
+                channel = gossiper.SRequestChannel
+            } else if gossip_packet.SReply != nil {
+                gossip_packet.SReply.HopLimit -=1
+                channel = gossiper.SReplyChannel
             }
             gossiper.UpdatePeer(relay_addr)
         } else {
@@ -222,7 +259,13 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
                 file_hash := msg.ClientMsg.HashValue
                 destination := msg.ClientMsg.Destination
                 go gossiper.DownloadFile(client_msg, destination,
-                                         file_hash)
+                                         file_hash, false)
+                continue
+            } else if operation == "NewFileSearch" {
+                key_words := strings.Split(client_msg, ",")
+                budget := msg.ClientMsg.Budget
+                if budget == 0 { budget = 2}
+                go gossiper.SearchFiles(budget, key_words)
                 continue
             } else if operation == "NewMessage" {
                 gossip_packet = message.GossipPacket{}
@@ -375,35 +418,44 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
 }
 
-func (gossiper *Gossiper) DownloadFile(file_name string, destination string, file_hash []byte) {
-    data_request := message.DataRequest{Origin: gossiper.Name,
-                                        Destination: destination,
-                                        HopLimit: HOPLIMIT,
-                                        FileName: file_name,
-                                        HashValue: file_hash}
-    //Send Request.
-    fmt.Println("Downloading metafile of", file_name, "from", destination)
-    meta_reply := gossiper.GetReply(data_request)
-    if file_name != meta_reply.FileName || hex.EncodeToString(file_hash) != hex.EncodeToString(meta_reply.HashValue) {
-        fmt.Println("File Name or Hash Value does not match")
+func (gossiper *Gossiper) DownloadFile(file_name string, destination string, file_hash []byte, meta_only bool) {
+    _, ok := gossiper.UploadedFiles[file_name]
+    file_size := int64(0)
+    if !ok {
+        data_request := message.DataRequest{Origin: gossiper.Name,
+                                            Destination: destination,
+                                            HopLimit: HOPLIMIT,
+                                            FileName: file_name,
+                                            HashValue: file_hash}
+        //Send Request.
+        fmt.Println("Downloading metafile of", file_name, "from", destination)
+        meta_reply := gossiper.GetReply(data_request)
+        if file_name != meta_reply.FileName || hex.EncodeToString(file_hash) != hex.EncodeToString(meta_reply.HashValue) {
+            fmt.Println("File Name or Hash Value does not match")
+        }
+        metadata_hash := sha256.New()
+        metadata_hash.Write(meta_reply.Data)
+        if hex.EncodeToString(file_hash)!= hex.EncodeToString(metadata_hash.Sum(nil)){
+            fmt.Println("Hash of the data does not match Hash Value")
+        }
+        metafile_name := "meta_"+file_name
+        metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
+        metafile, err := os.Create(metafile_path)
+        if err != nil {
+            fmt.Println("Unable to create metafile", metafile_path)
+            return
+        }
+        metafile.Write(meta_reply.Data)
+        metafile.Close()
+        gossiper.UploadedFiles[file_name] = UploadedFile{FileSize: file_size,
+                                            MetaFileName: metafile_name,
+                                            MetaHash: meta_reply.Data}
+        gossiper.UploadedChunks[file_name] = make([]string, 0)
+        gossiper.UploadedChunks[file_name] = append(gossiper.UploadedChunks[file_name], hex.EncodeToString(file_hash))
+        if DEBUG { fmt.Println(gossiper.UploadedChunks) }
     }
-    metadata_hash := sha256.New()
-    metadata_hash.Write(meta_reply.Data)
-    if hex.EncodeToString(file_hash)!= hex.EncodeToString(metadata_hash.Sum(nil)){
-        fmt.Println("Hash of the data does not match Hash Value")
-    }
-    metafile_name := "meta_"+file_name
-    metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
-    metafile, err := os.Create(metafile_path)
-    if err != nil {
-        fmt.Println("Unable to create metafile", metafile_path)
-        return
-    }
-    metafile.Write(meta_reply.Data)
-    metafile.Close()
-    gossiper.UploadedChunks[file_name] = make([]string, 0)
-    gossiper.UploadedChunks[file_name] = append(gossiper.UploadedChunks[file_name], hex.EncodeToString(file_hash))
-    if DEBUG { fmt.Println(gossiper.UploadedChunks) }
+    meta_hash := gossiper.UploadedFiles[file_name].MetaHash
+    if meta_only { return }
     file_path := filepath.Join(SHARING_DIRECTORY, file_name)
     file, err := os.Create(file_path)
     if err != nil {
@@ -411,13 +463,11 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
         return
     }
     defer file.Close()
-
     chunk_no := 0
-    file_size := int64(0)
     for {
-        if len(meta_reply.Data) <= chunk_no*32 { break }
+        if len(meta_hash) <= chunk_no*32 { break }
         offset := chunk_no*32
-        chunk_hash_req := meta_reply.Data[offset:offset+32]
+        chunk_hash_req := meta_hash[offset:offset+32]
         chunk_request := message.DataRequest{Origin: gossiper.Name,
                                             Destination: destination,
                                             HopLimit: HOPLIMIT,
@@ -450,13 +500,111 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
         file.Write(reply.Data)
         chunk_no +=1
         file_size+=int64(len(reply.Data))
+        uploaded_file := gossiper.UploadedFiles[file_name]
+        uploaded_file.FileSize = file_size
     }
     fmt.Println("RECONSTRUCTED file", file_name)
-    gossiper.UploadedFiles[file_name] = UploadedFile{FileSize: file_size,
-                                        MetaFileName: metafile_name,
-                                        MetaHash: meta_reply.Data}
     if DEBUG { fmt.Println(gossiper.UploadedChunks, gossiper.UploadedFiles) }
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
+}
+
+func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
+    var matches_chunks map[string][]bool
+    sreply_wait := make(chan SReplyReceive, 1)
+    reply_wait_obj := SReplyWait{ Key_words: key_words,
+                                  SReply_wait: sreply_wait}
+    gossiper.SReplyWaitChannel <- reply_wait_obj
+    for {
+        srequest := &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
+        gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
+        timer := time.NewTimer(1*time.Second)
+        select {
+            case sreply := <-sreply_wait:
+                 origin := sreply.Origin
+                 reply := sreply.SReply
+                if DEBUG { fmt.Println("SReply received", reply) }
+                _, ok := matches_chunks[reply.FileName]
+                if !ok {
+                    //Download metafile
+                    go gossiper.DownloadFile(origin, reply.FileName, reply.MetafileHash, true)
+                    matches_chunks[reply.FileName] = make([]bool,0)
+                }
+                for _, i := range(reply.ChunkMap) {
+                    if int(i) >=len(matches_chunks[reply.FileName]){
+                        new_arr := make([]bool, i)
+                        new_arr = append(new_arr, matches_chunks[reply.FileName]...)
+                        matches_chunks[reply.FileName] = new_arr
+                    }
+                    matches_chunks[reply.FileName][i-1] = true
+                }
+
+            case <-timer.C:
+                if DEBUG { fmt.Println("Timeout waiting for sreply", key_words, budget) }
+        }
+
+        matches := 0
+        for file_name, chunks := range(matches_chunks) {
+            matched := true
+            for _, chunk_present := range(chunks) {
+                if !chunk_present {
+                    matched = false
+                }
+            }
+            if matched {
+                file_data, ok := gossiper.UploadedFiles[file_name]
+                if !ok{ matched = false }
+                if len(chunks) < len(file_data.MetaHash)/32 {
+                    matched = false
+                }
+            }
+            if matched { 
+                matches+=1
+                WebServerSendChannel<-message.ClientMessage{Operation:"NewFileReply", Message: file_name}
+
+            }
+        }
+        if matches >= 2 { 
+            fmt.Println("SEARCH FINISHED")
+            break 
+        }
+        budget = budget*2
+        if budget > BUDGET_THRESHOLD {
+            fmt.Println("SEARCH ABORTED") 
+            break
+        }
+    }
+    reply_wait_obj.Close = true
+    gossiper.SReplyWaitChannel<-reply_wait_obj
+}
+
+func (gossiper *Gossiper) ForwardSearchReq(packet *message.SearchRequest, relay_addr string) {
+    origin:= packet.Origin
+    budget:=packet.Budget
+    key_words:=packet.Keywords
+    for {
+        var peer_list []string
+        for peer, _ := range gossiper.PeerList {
+            if relay_addr != peer {
+                peer_list = append(peer_list, peer)
+            }
+        }
+        if len(peer_list) == 0 { return }
+        peer_budget := int(int(budget)/len(peer_list))
+        extra_budget := int(budget) - int(peer_budget)
+        for _, peer := range(peer_list) {
+            srequest_budget := peer_budget
+            if extra_budget > 0 {
+                srequest_budget+=1
+                extra_budget-=1
+            }
+            if srequest_budget > 0 {
+                srequest := &message.SearchRequest{Origin:origin, Budget: uint64(srequest_budget), Keywords: key_words}
+            gossiper.SendSearchRequest(srequest, peer)
+            } else {
+                break
+            }
+        }
+    }
 }
 
 func (gossiper *Gossiper) GetReply(chunk_request message.DataRequest) *message.DataReply {
@@ -482,6 +630,44 @@ func (gossiper *Gossiper) GetReply(chunk_request message.DataRequest) *message.D
                 gossiper.ReplyWaitChannel<-reply_wait_obj
         }
     }
+}
+
+func (gossiper *Gossiper) ServeSearchRequest(srequest *message.SearchRequest) {
+    fmt.Println("Servin request", srequest)
+    gossiper.SRequestWaitChannel<-srequest
+    timer := time.NewTimer(time.Second)
+    var matched_files map[string]bool
+    for file_name, _:= range(gossiper.UploadedFiles) {
+        for _, keyword:= range(srequest.Keywords) {
+            matched, err:=regexp.MatchString(keyword, file_name)
+            if err != nil {
+                fmt.Println("Error while matching regex", err)
+            }
+            if matched {
+                matched_files[file_name] = true
+            }
+        }
+    }
+    if len(matched_files) > 0 {
+        sreply := message.SearchReply{ Origin: gossiper.Name,
+                                       Destination: srequest.Origin,
+                                       HopLimit: HOPLIMIT}
+        for file_name, _ := range(matched_files) {
+            sresult := &message.SearchResult{FileName: file_name}
+            meta_string :=  gossiper.UploadedChunks[file_name][0]
+            sresult.MetafileHash, _ = hex.DecodeString(meta_string)
+            for i, hash := range(gossiper.UploadedChunks[file_name]) {
+                if i== 0 {continue}
+                if hash != "" {
+                    sresult.ChunkMap = append(sresult.ChunkMap, uint64(i))
+                }
+            }
+            sreply.Results = append(sreply.Results, sresult)
+        }
+        gossiper.SReplyChannel<-message.GossipMessage{Packet: message.GossipPacket{SReply: &sreply}, Relay_addr: "N/A"}
+    }
+    <-timer.C
+    gossiper.SRequestWaitChannel<-srequest
 }
 
 func (gossiper *Gossiper) SendStatus() {
@@ -695,6 +881,70 @@ func (gossiper *Gossiper) GossipRequestMessages() {
     }
 }
 
+func (gossiper *Gossiper) GossipSearchRequests() {
+    for channel_packet := range gossiper.SRequestChannel {
+        relay_addr := channel_packet.Relay_addr
+        packet  := channel_packet.Packet.SRequest
+        fmt.Println("Received request", packet)
+        is_duplicate_chan := make(chan bool)
+        gossiper.SRequestReceiveChannel<- SRequestReceive{ SRequest: packet, IsDuplicate: is_duplicate_chan}
+        // Check if it is duplicate packet
+        is_duplicate:= <-is_duplicate_chan
+        if is_duplicate {
+            if DEBUG { fmt.Println("Discarding due to SRequest already being served") }
+            continue
+        }
+        go gossiper.ServeSearchRequest(packet)
+        // Search if packet is present
+        if packet.Budget <=0 {
+            // Discard the packet.
+            if DEBUG { fmt.Println("Discarding due to budget exceeded:",
+                                   packet.Origin, packet.Budget,
+                                   packet.Keywords) }
+            continue
+        }
+        if NOFORWARD {
+            fmt.Println("Not forwarding srequest")
+        } else {
+            go gossiper.ForwardSearchReq(packet, relay_addr)
+        }
+    }
+}
+
+func (gossiper *Gossiper) GossipSearchReply() {
+    for channel_packet := range gossiper.SReplyChannel {
+        // relay_addr := channel_packet.Relay_addr
+        packet  := channel_packet.Packet.SReply
+        fmt.Println("Received request", packet)
+        if packet.Destination == gossiper.Name {
+            for _, result := range(packet.Results) {
+                sreply:= SReplyReceive{Origin:packet.Origin, SReply: result}
+                gossiper.SReplyReceiveChannel<-sreply
+            }
+            continue
+        }
+        if packet.HopLimit <=0 {
+            // Discard the packet.
+            if DEBUG { fmt.Println("Discarding search reply message due to hop limit exceeded:",
+                                   packet.Origin,
+                                   packet.HopLimit,
+                                   packet.Destination) }
+            continue
+        }
+        next_addr, ok := gossiper.NextRoutingTable[packet.Destination]
+        if !ok {
+            // Discard the packet.
+            if DEBUG { fmt.Println("Discarding search reply message due to no entry in routing table:",
+                                   packet.Origin,
+                                   packet.HopLimit,
+                                   packet.Destination) }
+            continue
+        }
+        if NOFORWARD { fmt.Println("Not forwarding reply message")
+        } else { go gossiper.SendSearchReply(packet, next_addr) }
+    }
+}
+
 func (gossiper *Gossiper) GossipPrivateMessages() {
     for channel_packet := range gossiper.PrivateChannel {
         // relay_addr := channel_packet.Relay_addr
@@ -881,7 +1131,6 @@ func (gossiper *Gossiper)SendRequestMessage(req *message.DataRequest, next_addr 
 func (gossiper *Gossiper) SendReplyMessage(reply *message.DataReply, relay_addr string) {
     if DEBUG { fmt.Println("Send Reply to ", relay_addr) }
     gossiper.SendGossip(message.GossipPacket{Reply: reply}, relay_addr)
-
 }
 
 func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_no int, relay_addr string) {
@@ -906,6 +1155,16 @@ func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_
     if DEBUG { fmt.Println("Replying to the request for", hash, "to", destination) }
     //if DEBUG { fmt.Println("Chunk:", string(chunk_reply.Data)) }
     gossiper.SendReplyMessage(&chunk_reply, relay_addr)
+}
+
+func (gossiper *Gossiper) SendSearchReply(reply *message.SearchReply, relay_addr string) {
+    if DEBUG { fmt.Println("Send Search reply to ", relay_addr) }
+    gossiper.SendGossip(message.GossipPacket{SReply: reply}, relay_addr)
+}
+
+func (gossiper *Gossiper) SendSearchRequest(search *message.SearchRequest, relay_addr string) {
+    if DEBUG { fmt.Println("Send Search to ", relay_addr) }
+    gossiper.SendGossip(message.GossipPacket{SRequest: search}, relay_addr)
 }
 
 func (gossiper *Gossiper) WaitForAck() {
@@ -966,6 +1225,72 @@ func (gossiper *Gossiper) WaitForReply() {
                     close(old_ack_chan)
                 } else {
                     wait_map[hash_string] = reply_wait
+                }
+        }
+    }
+}
+
+func (gossiper *Gossiper) WaitForSRequest() {
+    // Waiting for SRequests
+    var currently_serving []*message.SearchRequest
+    for {
+        select {
+            case srequest := <-gossiper.SRequestReceiveChannel:
+                packet:= srequest.SRequest
+                found:=false
+                is_duplicate_chan := srequest.IsDuplicate
+                for _, serv_pack := range(currently_serving) {
+                    if serv_pack.Origin == packet.Origin && strings.Join(serv_pack.Keywords, ",") == strings.Join(packet.Keywords, ",") {
+                        is_duplicate_chan<-true
+                    }
+                }
+                if !found {
+                    is_duplicate_chan<-false
+                }
+            case sreq := <-gossiper.SRequestWaitChannel:
+                found:=false
+                for i, serv_pack := range(currently_serving) {
+                    if serv_pack==sreq {
+                        currently_serving = append(currently_serving[:i], currently_serving[i+1:]...)
+                        found=true
+                        break
+                    }
+                }
+                if !found {
+                    currently_serving = append(currently_serving, sreq)
+                }
+        }
+    }
+}
+
+func (gossiper *Gossiper) WaitForSReply() {
+    // Waiting for Reply
+    wait_map := make(map[string] chan SReplyReceive)
+    for {
+        select {
+            case reply := <-gossiper.SReplyReceiveChannel:
+                channels_to_reply := make(map[chan SReplyReceive]bool)
+                for kw, channel := range(wait_map) {
+                    matched, _:=regexp.MatchString(kw, reply.SReply.FileName)
+                    if matched {
+                        channels_to_reply[channel] = true
+                    }
+                }
+
+                for channel, _ := range(channels_to_reply) {
+                    channel <- reply
+                }
+            case srep_wait := <-gossiper.SReplyWaitChannel:
+                close_chan := srep_wait.Close
+                if close_chan {
+                    for _, kw := range(srep_wait.Key_words) {
+                        delete(wait_map, kw)
+                    }
+                    close(srep_wait.SReply_wait)
+                } else {
+                    for _, kw := range(srep_wait.Key_words) {
+                        wait_map[kw] = srep_wait.SReply_wait
+                    }
                 }
         }
     }
@@ -1040,6 +1365,8 @@ func main() {
     DEBUG=true
     PACKET_SIZE = 10*1024
     HOPLIMIT = 10
+    BUDGET_THRESHOLD = 32
+    MATCH_THRESHOLD = 2
     MessageQueue = make(chan message.Message)
     WebServerReceiveChannel = make(chan message.ClientMessage)
     WebServerSendChannel = make(chan message.ClientMessage)
@@ -1068,8 +1395,12 @@ func main() {
     go gossiper.GossipRequestMessages()
     go gossiper.GossipReplyMessages()
     go gossiper.GossipPrivateMessages()
+    go gossiper.GossipSearchRequests()
+    go gossiper.GossipSearchReply()
     go gossiper.WaitForAck()
     go gossiper.WaitForReply()
+    go gossiper.WaitForSRequest()
+    go gossiper.WaitForSReply()
     go gossiper.AntiEntropy()
     go gossiper.RouteRumor()
 

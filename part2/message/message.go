@@ -45,12 +45,33 @@ type DataReply struct {
     Data []byte
 }
 
+type SearchRequest  struct {
+    Origin    string
+    Budget    uint64
+    Keywords  []string
+}
+
+type SearchResult struct {
+    FileName string
+    MetafileHash []byte
+    ChunkMap []uint64
+}
+
+type SearchReply struct {
+    Origin string
+    Destination string
+    HopLimit uint32
+    Results []*SearchResult
+}
+
 type GossipPacket struct {
     Rumor *RumorMessage
     Status *StatusPacket
     Private *PrivateMessage
     Request *DataRequest
     Reply *DataReply
+    SRequest *SearchRequest
+    SReply *SearchReply
 }
 
 type GossipMessage struct {
@@ -64,6 +85,7 @@ type ClientMessage struct {
     Destination string
     Origin string
     HashValue []byte
+    Budget int
 }
 type Message struct {
     GossipMsg *GossipMessage

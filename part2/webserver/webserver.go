@@ -16,6 +16,7 @@ type Page struct {
     PrivateMessages map[string][]string
     KnownRoutes []string
     UploadedFiles []string
+    FoundFiles map[string]bool
 }
 
 var IndexPage *Page
@@ -54,7 +55,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 func StartWebServer(name string, peer_list []string,
                     webport string) {
-    IndexPage = &Page{Name: name, Peers: peer_list, PrivateMessages: make(map[string][]string)}
+    IndexPage = &Page{Name: name, Peers: peer_list, PrivateMessages: make(map[string][]string), FoundFiles: make(map[string]bool)}
     //fmt.Println("Starting Web Server")
     http.HandleFunc("/", index_handler)
     http.HandleFunc("/id", handler)
@@ -85,6 +86,8 @@ func StartWebServer(name string, peer_list []string,
             IndexPage.KnownRoutes = append(IndexPage.KnownRoutes, msg)
         } else if operation == "NewFileUpload" {
             IndexPage.UploadedFiles = append(IndexPage.UploadedFiles, msg)
+        } else if operation == "NewFileReply" {
+            IndexPage.FoundFiles[msg] = true
         }
     }
 }

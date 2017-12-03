@@ -72,7 +72,7 @@ $(document).ready(function(){
     });
     $("#fileuploadbtn").click(function () {
         var file_upload = document.getElementById("fileupload")
-        alert(fileupload.files)
+        //alert(fileupload.files)
         $.ajax
         ({
             url: '/id',
@@ -83,7 +83,7 @@ $(document).ready(function(){
                    Message: fileupload.files[0].name}
         });
         fileupload.value = ""
-        alert($(fileupload.files))
+        //alert($(fileupload.files))
         //console.dir(this.files)
     });
     $("#filedwldbtn").click(function () {
@@ -100,6 +100,30 @@ $(document).ready(function(){
         });
         $("#filedwldname").val('').attr('value','')
         $("#filedwldhash").val('').attr('value','')
+    });
+    $("#filesearchbtn").click(function () {
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {Operation: "NewFileSearch",
+                   Message: $("#filesearchkey").val()}
+        });
+        $("#filesearchkey").val('').attr('value','')
+    });
+    $("#filesearchdwldbtn").click(function () {
+        $.ajax
+        ({
+            url: '/id',
+            type: "POST",
+            contentType: "application/x-www-form-urlencoded",
+            dataType: "json",
+            data: {Operation: "NewFileDownload",
+                   Message: $("#filesearchfound").val()}
+        });
+        //$("#filesearchkey").val('').attr('value','')
     });
 });
 </script>
@@ -181,5 +205,17 @@ Peers: <strong>{{ range $key, $value := .Peers }}
        <li>{{ $value }}</li>
     {{ end }}
     </ul>
+</div>
+<div>
+<h2>File Search</h2>
+    <input class="webinput" id="filesearchkey" type="text" name="message">
+    <input class="webbtn" id="filesearchbtn" type="submit" value="Search Keywords"><br>
+    <select class="webinput" id="filesearchfound" >
+        <option value="" selected="selected" hidden>Found Files</option>
+        {{ range $key, $value := .FoundFiles}}
+        <option value="{{$key}}">{{ $key}}</option>
+        {{ end }}
+    </select>
+    <input class="webbtn" id="filesearchdwldbtn" type="submit" value="Download File"><br>
 </div>
 </body>
