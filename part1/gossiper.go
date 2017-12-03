@@ -23,6 +23,7 @@ import (
 
 // go run gossiper.go -UIPort=10000 -gossipAddr=127.0.0.1:5000 -name=nodeA -peers=127.0.0.1:5001_10.1.1.7:5002
 var DEBUG bool
+var PACKET_SIZE int
 var RTIMER int
 var NOFORWARD bool
 var HOPLIMIT uint32
@@ -48,7 +49,7 @@ type AckWait struct {
 
 type ReplyWait struct {
     Hash []byte
-    Reply_wait chan message.DataReply
+    Reply_wait chan *message.DataReply
     Close bool}
 
 type UploadedFile struct {
@@ -77,7 +78,7 @@ type Gossiper struct {
     AckReceiveChannel chan string
     AckSendChannel chan AckWait
     ReplyWaitChannel chan ReplyWait
-    ReplyReceiveChannel chan message.DataReply
+    ReplyReceiveChannel chan *message.DataReply
 }
 
 func NewGossiper(name, webport string,
@@ -102,11 +103,12 @@ func NewGossiper(name, webport string,
                           RumorMessages: make(map[string][]message.RumorMessage),
                           PrivateMessages: make(map[string][]string),
                           UploadedFiles: make(map[string]UploadedFile),
+                          UploadedChunks: make(map[string][]string),
                           PeerList: peer_list_map,
                           AckReceiveChannel: make(chan string),
                           AckSendChannel: make(chan AckWait),
                           ReplyWaitChannel: make(chan ReplyWait),
-                          ReplyReceiveChannel: make(chan message.DataReply),
+                          ReplyReceiveChannel: make(chan *message.DataReply),
                         }
     //Add self into the VectorTable
     gossiper.VectorTable[name] = 1
@@ -126,20 +128,20 @@ func NewGossiper(name, webport string,
 func ReceiveClientMessage(conn *net.UDPConn) {
     if DEBUG { fmt.Println("Receive messages on", conn) }
     for {
-        packet := &message.ClientMessage{}
-        packetBytes := make([]byte, 1024)
+        packet := message.ClientMessage{}
+        packetBytes := make([]byte, PACKET_SIZE)
         rlen, _, err := conn.ReadFrom(packetBytes)
         if err != nil {
             if DEBUG { fmt.Println(err) }
             continue
         }
-        if rlen > 1024 {
+        if rlen > PACKET_SIZE {
             if DEBUG { fmt.Println("Size error: ", rlen) }
             continue
         }
-        protobuf.Decode(packetBytes, packet)
+        protobuf.Decode(packetBytes, &packet)
         if DEBUG { fmt.Println("Received message on", packet) }
-        MessageQueue<-message.Message{ClientMsg: packet}
+        MessageQueue<-message.Message{ClientMsg: &packet}
     }
 }
 
@@ -147,16 +149,17 @@ func ReceiveGossipMessage(conn *net.UDPConn) {
     if DEBUG { fmt.Println("Receive messages on", conn) }
     for {
         packet := &message.GossipPacket{}
-        packetBytes := make([]byte, 1024)
+        packetBytes := make([]byte, PACKET_SIZE)
         rlen, addr, err := conn.ReadFrom(packetBytes)
         if err != nil {
             if DEBUG { fmt.Println(err) }
             continue
         }
-        if rlen > 1024 {
+        if rlen > PACKET_SIZE {
             if DEBUG { fmt.Println("Size error: ", rlen) }
             continue
         }
+        //fmt.Println("Packet received", packetBytes)
         protobuf.Decode(packetBytes, packet)
         relay_addr := addr.String()
         if relay_addr == GOSSIP_PORT {
@@ -302,7 +305,8 @@ func (gossiper *Gossiper)UpdateID(new_id string) {
 }
 
 func (gossiper *Gossiper) UploadFile(file_name string) {
-    file_path := filepath.Join("files", file_name)
+    file_path := filepath.Join(SHARING_DIRECTORY, file_name)
+    os.Link(filepath.Join("files", file_name), file_path)
     file, err := os.Open(file_path)
     if err != nil {
         fmt.Println("Error opening file:", file_name, err)
@@ -323,6 +327,8 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
     offset := int64(0)
     chunk_no := 1
     metadata_hash := sha256.New()
+    gossiper.UploadedChunks[file_name] = make([]string, 0)
+    gossiper.UploadedChunks[file_name] = append(gossiper.UploadedChunks[file_name], "")
     for {
         if offset >= file_size { break }
         file_chunk_size := CHUNK_SIZE
@@ -350,6 +356,8 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
         chunk_hash := h.Sum(nil)
         metafile.Write(chunk_hash)
         metadata_hash.Write(chunk_hash)
+        gossiper.UploadedChunks[file_name] = append(gossiper.UploadedChunks[file_name], hex.EncodeToString(chunk_hash))
+        if DEBUG { fmt.Println("Chunk", gossiper.UploadedChunks) }
 
         offset +=file_chunk_size
         chunk_no+=1
@@ -358,10 +366,12 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
 
     //Calculate SHA of metafile
     metafile_hash := metadata_hash.Sum(nil)
+    gossiper.UploadedChunks[file_name][0] = hex.EncodeToString(metafile_hash)
     gossiper.UploadedFiles[file_name] = UploadedFile{FileSize: file_size,
                                         MetaFileName: metafile_name,
                                         MetaHash: metafile_hash }
-    if DEBUG { fmt.Println("Uploaded and chunked file:", file_name, ":", gossiper.UploadedFiles[file_name]) }
+    if DEBUG { fmt.Println("Uploaded and chunked file:", file_name, "into", chunk_no, ":", gossiper.UploadedFiles[file_name]) }
+    if DEBUG { fmt.Println(gossiper.UploadedChunks) }
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
 }
 
@@ -373,8 +383,7 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
                                         HashValue: file_hash}
     //Send Request.
     fmt.Println("Downloading metafile of", file_name, "from", destination)
-    gossiper.RequestChannel<-message.GossipMessage{Packet: message.GossipPacket{Request: &data_request}, Relay_addr: "N/A"}
-    meta_reply := gossiper.GetReply(file_hash)
+    meta_reply := gossiper.GetReply(data_request)
     if file_name != meta_reply.FileName || hex.EncodeToString(file_hash) != hex.EncodeToString(meta_reply.HashValue) {
         fmt.Println("File Name or Hash Value does not match")
     }
@@ -392,10 +401,10 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
     }
     metafile.Write(meta_reply.Data)
     metafile.Close()
-    gossiper.UploadedChunks[file_name] = make([]string, (len(meta_reply.Data)/32)+1)
+    gossiper.UploadedChunks[file_name] = make([]string, 0)
     gossiper.UploadedChunks[file_name] = append(gossiper.UploadedChunks[file_name], hex.EncodeToString(file_hash))
-
-    file_path := filepath.Join("files", file_name)
+    if DEBUG { fmt.Println(gossiper.UploadedChunks) }
+    file_path := filepath.Join(SHARING_DIRECTORY, file_name)
     file, err := os.Create(file_path)
     if err != nil {
         fmt.Println("Unable to create file", file_path)
@@ -406,6 +415,7 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
     chunk_no := 0
     file_size := int64(0)
     for {
+        if len(meta_reply.Data) <= chunk_no*32 { break }
         offset := chunk_no*32
         chunk_hash_req := meta_reply.Data[offset:offset+32]
         chunk_request := message.DataRequest{Origin: gossiper.Name,
@@ -415,8 +425,7 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
                                             HashValue: chunk_hash_req}
         //Send Request.
         fmt.Println("Downloading", file_name, "chunk", chunk_no+1, "from", destination)
-        gossiper.RequestChannel<-message.GossipMessage{Packet: message.GossipPacket{Request: &chunk_request}, Relay_addr: "N/A"}
-        reply := gossiper.GetReply(file_hash)
+        reply := gossiper.GetReply(chunk_request)
         if file_name != reply.FileName || hex.EncodeToString(chunk_hash_req) != hex.EncodeToString(reply.HashValue) {
             fmt.Println("File Name or Hash Value does not match")
             continue
@@ -436,41 +445,43 @@ func (gossiper *Gossiper) DownloadFile(file_name string, destination string, fil
         chunkfile.Write(reply.Data)
         chunkfile.Close()
         gossiper.UploadedChunks[file_name] = append(gossiper.UploadedChunks[file_name], hex.EncodeToString(chunk_hash_req))
+        if DEBUG { fmt.Println(gossiper.UploadedChunks) }
 
         file.Write(reply.Data)
         chunk_no +=1
         file_size+=int64(len(reply.Data))
-        if len(meta_reply.Data) >= chunk_no*32 { break }
     }
     fmt.Println("RECONSTRUCTED file", file_name)
     gossiper.UploadedFiles[file_name] = UploadedFile{FileSize: file_size,
                                         MetaFileName: metafile_name,
                                         MetaHash: meta_reply.Data}
+    if DEBUG { fmt.Println(gossiper.UploadedChunks, gossiper.UploadedFiles) }
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
 }
 
-func (gossiper *Gossiper) GetReply(file_hash []byte) message.DataReply {
+func (gossiper *Gossiper) GetReply(chunk_request message.DataRequest) *message.DataReply {
     for {
+        gossiper.RequestChannel<-message.GossipMessage{Packet: message.GossipPacket{Request: &chunk_request}, Relay_addr: "N/A"}
+        file_hash := chunk_request.HashValue
         // Wait for reply or timeout
         timer := time.NewTimer(5*time.Second)
-        reply_wait := make(chan message.DataReply, 1)
+        reply_wait := make(chan *message.DataReply, 1)
         reply_wait_obj := ReplyWait{Hash: file_hash,
                                     Reply_wait: reply_wait}
         gossiper.ReplyWaitChannel <- reply_wait_obj
         select {
             case reply := <-reply_wait:
-                if DEBUG { fmt.Println("Reply received") }
+                if DEBUG { fmt.Println("Reply received", reply) }
                 reply_wait_obj.Close = true
                 gossiper.ReplyWaitChannel<-reply_wait_obj
                 return reply
             case <-timer.C:
-                if DEBUG { fmt.Println("Timeout") }
+                if DEBUG { fmt.Println("Timeout waiting for hash", hex.EncodeToString(file_hash)) }
                 // De-register the object from the wait.
                 reply_wait_obj.Close = true
                 gossiper.ReplyWaitChannel<-reply_wait_obj
         }
     }
-
 }
 
 func (gossiper *Gossiper) SendStatus() {
@@ -602,6 +613,8 @@ func (gossiper *Gossiper) GossipMessages() {
 func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr string) bool{
     file_name := req.FileName
     hash_value := req.HashValue
+    if DEBUG { fmt.Println(gossiper.UploadedChunks) }
+    if DEBUG { fmt.Println(hex.EncodeToString(hash_value)) }
     chunk_hashes, ok := gossiper.UploadedChunks[file_name]
     if !ok {
         return false
@@ -609,6 +622,7 @@ func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr str
 
     for chunk_no, chunk_hash := range chunk_hashes {
         if chunk_hash == hex.EncodeToString(hash_value) {
+            if DEBUG { fmt.Println("Chunk", chunk_no, ":", hex.EncodeToString(hash_value), "is present") }
             go gossiper.SendReply(req.Origin, file_name, chunk_no, relay_addr)
             return true
         }
@@ -621,8 +635,7 @@ func (gossiper *Gossiper) GossipReplyMessages() {
         // relay_addr := channel_packet.Relay_addr
         packet  := channel_packet.Packet.Reply
         if packet.Destination == gossiper.Name {
-            if DEBUG { fmt.Println("File", packet.FileName, "reply from", packet.Origin) }
-            gossiper.ReplyReceiveChannel<-*packet
+            gossiper.ReplyReceiveChannel<-packet
             continue
         }
         if packet.HopLimit <=0 {
@@ -651,6 +664,7 @@ func (gossiper *Gossiper) GossipRequestMessages() {
     for channel_packet := range gossiper.RequestChannel {
         relay_addr := channel_packet.Relay_addr
         packet  := channel_packet.Packet.Request
+        if DEBUG { fmt.Println("Received request", packet) }
         if gossiper.IsChunkPresent(*packet, relay_addr) {
             if DEBUG { fmt.Println("Found the requested chunk") }
             continue
@@ -825,7 +839,12 @@ func (gossiper *Gossiper) TransmitMessageWithRumorMongering(channel_packet messa
 func (gossiper *Gossiper)SendGossip(packet message.GossipPacket,
                                     peer_to_send string) {
     if DEBUG { fmt.Println("Peer to send is ", peer_to_send, "Packet to send", packet) }
-    packetBytes, _ := protobuf.Encode(&packet)
+    packetBytes, proto_err := protobuf.Encode(&packet)
+    //fmt.Println("Packet sent", packetBytes)
+    if proto_err != nil {
+        fmt.Println("Error while sending packet:", packet, proto_err)
+        os.Exit(1)
+    }
     udpAddr, _ := net.ResolveUDPAddr("udp", peer_to_send)
     gossiper.GossipConn.WriteToUDP(packetBytes, udpAddr)
 }
@@ -860,7 +879,7 @@ func (gossiper *Gossiper)SendRequestMessage(req *message.DataRequest, next_addr 
 }
 
 func (gossiper *Gossiper) SendReplyMessage(reply *message.DataReply, relay_addr string) {
-    if DEBUG { fmt.Println("Send Reply", reply) }
+    if DEBUG { fmt.Println("Send Reply to ", relay_addr) }
     gossiper.SendGossip(message.GossipPacket{Reply: reply}, relay_addr)
 
 }
@@ -875,14 +894,17 @@ func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_
         path =filepath.Join(SHARING_DIRECTORY, "chunk_"+strconv.Itoa(chunk_no)+"_"+file_name)
     }
     file, _ := os.Open(path)
+    file_info, _ := file.Stat()
+    file_size := file_info.Size()
     defer file.Close()
-    data := make([]byte, CHUNK_SIZE)
+    data := make([]byte, file_size)
     file.Read(data)
     chunk_reply.Data = data
     hash := gossiper.UploadedChunks[file_name][chunk_no]
     chunk_reply.HashValue, _ = hex.DecodeString(hash)
 
-    if DEBUG { fmt.Println("Send Reply", chunk_reply) }
+    if DEBUG { fmt.Println("Replying to the request for", hash, "to", destination) }
+    //if DEBUG { fmt.Println("Chunk:", string(chunk_reply.Data)) }
     gossiper.SendReplyMessage(&chunk_reply, relay_addr)
 }
 
@@ -923,7 +945,7 @@ func (gossiper *Gossiper) WaitForAck() {
 
 func (gossiper *Gossiper) WaitForReply() {
     // Waiting for Reply
-    wait_map := make(map[string] chan message.DataReply)
+    wait_map := make(map[string] chan *message.DataReply)
     for {
         select {
             case reply := <-gossiper.ReplyReceiveChannel:
@@ -994,10 +1016,10 @@ func (gossiper *Gossiper) RouteRumorInit(){
     }
 }
 
-func (gossiper *Gossiper) Close() {
-    gossiper.UIConn.Close()
-    gossiper.GossipConn.Close()
-}
+//func (gossiper *Gossiper) Close() {
+//    gossiper.UIConn.Close()
+//    gossiper.GossipConn.Close()
+//}
 
 func main() {
     // Parse the flags.
@@ -1016,6 +1038,7 @@ func main() {
 
     rand.Seed(time.Now().UTC().UnixNano())
     DEBUG=true
+    PACKET_SIZE = 10*1024
     HOPLIMIT = 10
     MessageQueue = make(chan message.Message)
     WebServerReceiveChannel = make(chan message.ClientMessage)
@@ -1025,7 +1048,7 @@ func main() {
     GOSSIP_PORT = *gossipPort
     UI_PORT =*ui_port
     CHUNK_SIZE = *chunk_size
-    dir, err := ioutil.TempDir("", GOSSIP_PORT)
+    dir, err := ioutil.TempDir(".", GOSSIP_PORT)
     if err != nil {
         fmt.Println("Failed to create temporary directory", err)
         os.Exit(1)
@@ -1038,16 +1061,17 @@ func main() {
     } else { peer_list = strings.Split(*peers, "_") }
 
     gossiper := NewGossiper(*name, *webport, peer_list)
-    defer gossiper.Close()
+    //defer gossiper.Close()
 
     go gossiper.SendStatus()
+    go gossiper.GossipMessages()
     go gossiper.GossipRequestMessages()
+    go gossiper.GossipReplyMessages()
     go gossiper.GossipPrivateMessages()
     go gossiper.WaitForAck()
     go gossiper.WaitForReply()
     go gossiper.AntiEntropy()
     go gossiper.RouteRumor()
-    go gossiper.GossipMessages()
 
     sigs := make(chan os.Signal, 1)
     done := make(chan bool, 1)
