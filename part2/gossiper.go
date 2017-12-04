@@ -98,7 +98,7 @@ type Gossiper struct {
     NextRoutingSeq map[string]uint32
     RumorMessages map[string][]message.RumorMessage
     PrivateMessages map[string][]string
-    UploadedFiles map[string]UploadedFile
+    UploadedFiles map[string]*UploadedFile
     PeerList map[string]bool
     AckReceiveChannel chan string
     AckSendChannel chan AckWait
@@ -133,7 +133,7 @@ func NewGossiper(name, webport string,
                           NextRoutingSeq: make(map[string]uint32),
                           RumorMessages: make(map[string][]message.RumorMessage),
                           PrivateMessages: make(map[string][]string),
-                          UploadedFiles: make(map[string]UploadedFile),
+                          UploadedFiles: make(map[string]*UploadedFile),
                           PeerList: peer_list_map,
                           AckReceiveChannel: make(chan string),
                           AckSendChannel: make(chan AckWait),
@@ -411,7 +411,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
 
     //Calculate SHA of metafile
     metafile_hash := metadata_hash.Sum(nil)
-    gossiper.UploadedFiles[file_name] = UploadedFile{FileSize: file_size,
+    gossiper.UploadedFiles[file_name] = &UploadedFile{FileSize: file_size,
                                         MetaFileName: metafile_name,
                                         MetaHash: metafile_hash,
                                         CData: cdata}
@@ -456,7 +456,7 @@ func (gossiper *Gossiper) DownloadMetadata(file_name string, destination string,
         CData[chunk_no] = chunk_data
         chunk_no+=1
     }
-    gossiper.UploadedFiles[file_name] = UploadedFile{
+    gossiper.UploadedFiles[file_name] = &UploadedFile{
                                         MetaFileName: metafile_name,
                                         MetaHash: file_hash,
                                         CData: CData}
@@ -464,12 +464,11 @@ func (gossiper *Gossiper) DownloadMetadata(file_name string, destination string,
 }
 
 func (gossiper *Gossiper) DownloadFile(file_name string, destination string, file_hash []byte) {
-    _, metadata_downloaded := gossiper.UploadedFiles[file_name]
+    file_data, metadata_downloaded := gossiper.UploadedFiles[file_name]
     if !metadata_downloaded {
         if destination == "" { fmt.Println("Insuffucient information, destination missing for", file_name) }
         if hex.EncodeToString(file_hash) == "" { fmt.Println("Insufficient information, file hash is missing for", file_name) }
         gossiper.DownloadMetadata(file_name, destination, file_hash)
-        file_data := gossiper.UploadedFiles[file_name]
         for _, chunk_data := range(file_data.CData) {
             chunk_data.Sources[destination] = true
         }
@@ -520,8 +519,7 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
 
         file.Write(reply.Data)
         file_size+=int64(len(reply.Data))
-        uploaded_file := gossiper.UploadedFiles[file_name]
-        uploaded_file.FileSize = file_size
+        gossiper.UploadedFiles[file_name].FileSize = file_size
     }
     fmt.Println("RECONSTRUCTED file", file_name)
     if DEBUG { fmt.Println(gossiper.UploadedFiles) }
@@ -534,10 +532,10 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
     reply_wait_obj := SReplyWait{ Key_words: key_words,
                                   SReply_wait: sreply_wait}
     gossiper.SReplyWaitChannel <- reply_wait_obj
+    srequest := &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
+    gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
+    timer := time.NewTimer(1*time.Second)
     for {
-        srequest := &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
-        gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
-        timer := time.NewTimer(1*time.Second)
         select {
             case sreply := <-sreply_wait:
                 origin := sreply.Origin
@@ -562,6 +560,14 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
 
             case <-timer.C:
                 if DEBUG { fmt.Println("Timeout waiting for sreply", key_words, budget) }
+                budget = budget*2
+                if budget > BUDGET_THRESHOLD {
+                    fmt.Println("SEARCH ABORTED")
+                    break
+                }
+                srequest = &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
+                gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
+                timer = time.NewTimer(1*time.Second)
         }
 
         matches := 0
@@ -577,17 +583,13 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
 
         if matches >= 2 {
             for file_name, chunks := range(temp_stored_searches) {
-                file_data, _:= gossiper.UploadedFiles[file_name]
+                file_data, metadata_downloaded:= gossiper.UploadedFiles[file_name]
+                if !metadata_downloaded { continue }
                 for chunk_no, chunk_data := range file_data.CData {
                     chunk_data.Sources = chunks[uint64(chunk_no+1)]
                 }
             }
             fmt.Println("SEARCH FINISHED")
-            break
-        }
-        budget = budget*2
-        if budget > BUDGET_THRESHOLD {
-            fmt.Println("SEARCH ABORTED")
             break
         }
     }
@@ -813,10 +815,10 @@ func (gossiper *Gossiper) GossipMessages() {
 func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr string) bool{
     file_name := req.FileName
     hash_value := req.HashValue
-    if DEBUG { fmt.Println(gossiper.UploadedFiles[file_name].CData) }
-    if DEBUG { fmt.Println(hex.EncodeToString(hash_value)) }
     file_data, metadata_present := gossiper.UploadedFiles[file_name]
     if !metadata_present { return false }
+    if DEBUG { fmt.Println(file_data.CData) }
+    if DEBUG { fmt.Println(hex.EncodeToString(hash_value)) }
     meta_hash := file_data.MetaHash
     if hex.EncodeToString(meta_hash) == hex.EncodeToString(hash_value) {
         if DEBUG { fmt.Println("Metadata", hex.EncodeToString(hash_value), "is present") }
@@ -1004,7 +1006,7 @@ func (gossiper *Gossiper) GossipPrivateMessages() {
 func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessage) {
     relay_addr := channel_packet.Relay_addr
     packet  := channel_packet.Packet.Rumor
-    if relay_addr == "N/A" { return }
+    if packet.Origin == gossiper.Name || relay_addr == "N/A" { return }
     if DEBUG { fmt.Println("Received Route rumor about ", packet.Origin, " from ", relay_addr) }
     next_seq, ok := gossiper.NextRoutingSeq[packet.Origin]
     is_direct:=false
@@ -1388,7 +1390,7 @@ func main() {
     flag.Parse()
 
     rand.Seed(time.Now().UTC().UnixNano())
-    DEBUG=true
+    DEBUG=false
     PACKET_SIZE = 10*1024
     HOPLIMIT = 10
     BUDGET_THRESHOLD = 32
