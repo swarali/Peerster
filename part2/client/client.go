@@ -18,8 +18,10 @@ func main() {
 	var msg = flag.String("msg", "",
                           "Message sent from client to the server")
     var dest = flag.String("Dest", "", "Destination node for private message")
-    var file = flag.String("file", "", "Name of the file to share")
-    var request = flag.String("request", "", "Name of the file to share")
+    var file = flag.String("file", "", "Name of the file to share/download")
+    var request = flag.String("request", "", "Metadata hash of the file to download")
+    var keywords = flag.String("keywords", "", "Keywords to search")
+    var budget = flag.Int("budget", 0, "Budget for search")
 
 	flag.Parse()
 	// fmt.Println(*msg, *ui_port)
@@ -28,7 +30,9 @@ func main() {
 	defer con.Close()
 
     var msg_proto *message.ClientMessage
-    if *request != "" {
+    if *keywords != "" {
+        msg_proto = &message.ClientMessage{ Operation: "NewFileSearch", Message: *keywords, HashValue: make([]byte, 0) , Budget:*budget}
+    } else if *request != "" {
         hash, _ := hex.DecodeString(*request)
         msg_proto = &message.ClientMessage{ Operation: "NewFileDownload", Message: *file, Destination: *dest, HashValue: hash}
     } else if *file != "" {
