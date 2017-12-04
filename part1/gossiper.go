@@ -1037,7 +1037,7 @@ func main() {
     flag.Parse()
 
     rand.Seed(time.Now().UTC().UnixNano())
-    DEBUG=true
+    DEBUG=false
     PACKET_SIZE = 10*1024
     HOPLIMIT = 10
     MessageQueue = make(chan message.Message)
