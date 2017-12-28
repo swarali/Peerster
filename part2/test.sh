@@ -1,8 +1,8 @@
-go run gossiper.go -UIPort=10000 -gossipAddr=127.0.0.1:5000 -name=Swarali_5_0 -peers=127.0.0.1:5001 -rtimer=20 > a.log &
+go run gossiper.go -UIPort=10000 -gossipAddr=127.0.0.1:5000 -name=Swarali_5_0 -peers=127.0.0.1:5001 -rtimer=20 > /dev/null &
 
-go run gossiper.go -UIPort=10001 -gossipAddr=127.0.0.1:5001 -name=Swarali_5_1 -peers=127.0.0.1:5000 -webport=8081 -rtimer=20 >b.log &
+go run gossiper.go -UIPort=10001 -gossipAddr=127.0.0.1:5001 -name=Swarali_5_1 -peers=127.0.0.1:5000 -webport=8081 -rtimer=20 > /dev/null &
 
-go run gossiper.go -UIPort=10002 -gossipAddr=127.0.0.1:5002 -name=Swarali_5_2 -peers=127.0.0.1:5001 -webport=8082 -rtimer=20 >c.log &
+go run gossiper.go -UIPort=10002 -gossipAddr=127.0.0.1:5002 -name=Swarali_5_2 -peers=127.0.0.1:5001 -webport=8082 -rtimer=20 > /dev/null &
 sleep 40
 
 #go run client/client.go -UIPort=10000 -msg=A

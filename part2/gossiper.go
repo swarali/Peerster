@@ -6,6 +6,7 @@ import (
     "fmt"
     "flag"
     "io/ioutil"
+    "log"
     "math/rand"
     "net"
     "os"
@@ -147,13 +148,13 @@ func NewGossiper(name, webport string,
                         }
     //Add self into the VectorTable
     gossiper.VectorTable[name] = 1
-    if DEBUG { fmt.Println("Start receiving client msg on", UI_PORT, ":", client_conn) }
+    log.Println("Start receiving client msg on", UI_PORT, ":", client_conn)
     go ReceiveClientMessage(client_conn)
 
-    if DEBUG { fmt.Println("Start receiving gossip msg on", GOSSIP_PORT, ":", gossip_conn) }
+    log.Println("Start receiving gossip msg on", GOSSIP_PORT, ":", gossip_conn)
     go ReceiveGossipMessage(gossip_conn)
 
-    if DEBUG { fmt.Println("Start receiving webclient msg on", webport) }
+    log.Println("Start receiving webclient msg on", webport)
     go ReceiveWebClientMessage(name, peer_list, webport)
 
     go gossiper.ProcessMessageQueue()
@@ -161,44 +162,42 @@ func NewGossiper(name, webport string,
 }
 
 func ReceiveClientMessage(conn *net.UDPConn) {
-    if DEBUG { fmt.Println("Receive messages on", conn) }
     for {
         packet := message.ClientMessage{}
         packetBytes := make([]byte, PACKET_SIZE)
         rlen, _, err := conn.ReadFrom(packetBytes)
         if err != nil {
-            if DEBUG { fmt.Println(err) }
+            log.Println(err)
             continue
         }
         if rlen > PACKET_SIZE {
-            if DEBUG { fmt.Println("Size error: ", rlen) }
+            log.Println("Size error: ", rlen)
             continue
         }
         protobuf.Decode(packetBytes, &packet)
-        if DEBUG { fmt.Println("Received message on", packet) }
+        log.Println("Received message on", packet)
         MessageQueue<-message.Message{ClientMsg: &packet}
     }
 }
 
 func ReceiveGossipMessage(conn *net.UDPConn) {
-    if DEBUG { fmt.Println("Receive messages on", conn) }
     for {
         packet := &message.GossipPacket{}
         packetBytes := make([]byte, PACKET_SIZE)
         rlen, addr, err := conn.ReadFrom(packetBytes)
         if err != nil {
-            if DEBUG { fmt.Println(err) }
+            log.Println(err)
             continue
         }
         if rlen > PACKET_SIZE {
-            if DEBUG { fmt.Println("Size error: ", rlen) }
+            log.Println("Size error: ", rlen)
             continue
         }
         //fmt.Println("Packet received", packetBytes)
         protobuf.Decode(packetBytes, packet)
         relay_addr := addr.String()
         if relay_addr == GOSSIP_PORT {
-            if DEBUG { fmt.Println("Drop packets from the same node") }
+            log.Println("Drop packets from the same node")
             continue
         }
         gossip_msg := &message.GossipMessage{Packet:*packet,
@@ -225,9 +224,9 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
             relay_addr = msg.GossipMsg.Relay_addr
             if gossip_packet.Rumor != nil {
                 channel = gossiper.RumorChannel
-                if gossip_packet.Rumor.LastIP != nil && gossip_packet.Rumor.LastPort != nil {
-                gossiper.UpdatePeer(gossip_packet.Rumor.LastIP.String()+":"+strconv.Itoa(*gossip_packet.Rumor.LastPort))
-            }
+            //    if gossip_packet.Rumor.LastIP != nil && gossip_packet.Rumor.LastPort != nil {
+            //    gossiper.UpdatePeer(gossip_packet.Rumor.LastIP.String()+":"+strconv.Itoa(*gossip_packet.Rumor.LastPort))
+            //}
             } else if gossip_packet.Status != nil {
                 channel = gossiper.StatusChannel
             } else if gossip_packet.Private != nil {
@@ -302,8 +301,12 @@ func (gossiper *Gossiper)PrintPacket(packet message.GossipPacket, relay_addr str
         if relay_addr == "N/A" {
             fmt.Printf("CLIENT %s %s\n", packet.Rumor.Text,
                        gossiper.Name)
+            log.Printf("CLIENT %s %s\n", packet.Rumor.Text,
+                       gossiper.Name)
         } else {
             fmt.Printf("RUMOR origin %s from %s ID %d contents %s\n", packet.Rumor.Origin, relay_addr, packet.Rumor.ID,
+                            packet.Rumor.Text)
+            log.Printf("RUMOR origin %s from %s ID %d contents %s\n", packet.Rumor.Origin, relay_addr, packet.Rumor.ID,
                             packet.Rumor.Text)
         }
     } else if packet.Status != nil {
@@ -313,10 +316,13 @@ func (gossiper *Gossiper)PrintPacket(packet message.GossipPacket, relay_addr str
             status_str = fmt.Sprintf("%s %s", status_str, peer_status_str)
         }
         fmt.Println(status_str)
+        log.Println(status_str)
     } else if packet.Private != nil {
         private_msg := packet.Private
         if private_msg.Destination == gossiper.Name {
             fmt.Printf("PRIVATE: %s:%d:%s\n", private_msg.Origin,
+                       private_msg.HopLimit, private_msg.Text)
+            log.Printf("PRIVATE: %s:%d:%s\n", private_msg.Origin,
                        private_msg.HopLimit, private_msg.Text)
         } else { return }
     }
@@ -329,6 +335,7 @@ func (gossiper *Gossiper)PrintPeers() {
     peer_list := []string{}
     for peer, _ := range(peer_map) { peer_list = append(peer_list, peer) }
     fmt.Println(strings.Join(peer_list, ","))
+    log.Println(strings.Join(peer_list, ","))
 }
 
 func (gossiper *Gossiper)UpdatePeer(relay_addr string) {
@@ -336,7 +343,7 @@ func (gossiper *Gossiper)UpdatePeer(relay_addr string) {
     if relay_addr == GOSSIP_PORT { return }
     _, peer_exists := gossiper.PeerList[relay_addr]
     if peer_exists == false {
-        if DEBUG { fmt.Println("Updating Peer: ", relay_addr) }
+        log.Println("Updating Peer: ", relay_addr)
         gossiper.PeerList[relay_addr] = true
         WebServerSendChannel<-message.ClientMessage{Operation:"NewPeer", Message: relay_addr}
     }
@@ -355,6 +362,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
     file, err := os.Open(file_path)
     if err != nil {
         fmt.Println("Error opening file:", file_name, err)
+        log.Println("Error opening file:", file_name, err)
     }
     defer file.Close()
     file_info, _ := file.Stat()
@@ -365,6 +373,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
     metafile, err := os.Create(metafile_path)
     if err != nil {
         fmt.Println("Unable to create metafile", metafile_path)
+        log.Println("Unable to create metafile", metafile_path)
         return
     }
     defer metafile.Close()
@@ -390,6 +399,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
         }
         if ch_err != nil {
             fmt.Println("Unable to write/create chunk", chunk_file_path)
+            log.Println("Unable to write/create chunk", chunk_file_path)
             break
         }
         chunk_file.Close()
@@ -403,7 +413,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
         chunk_data := &ChunkData{Hash: chunk_hash, Sources: make(map[string]bool)}
         chunk_data.Sources[gossiper.Name] = true
         cdata = append(cdata, chunk_data)
-        if DEBUG { fmt.Println("Chunk", cdata) }
+        log.Println("Chunk", cdata)
 
         offset +=file_chunk_size
         chunk_no+=1
@@ -415,7 +425,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
                                         MetaFileName: metafile_name,
                                         MetaHash: metafile_hash,
                                         CData: cdata}
-    if DEBUG { fmt.Println("Uploaded and chunked file:", file_name, "into", chunk_no, ":", gossiper.UploadedFiles[file_name]) }
+    log.Println("Uploaded and chunked file:", file_name, "into", chunk_no, ":", gossiper.UploadedFiles[file_name])
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
 }
 
@@ -426,21 +436,25 @@ func (gossiper *Gossiper) DownloadMetadata(file_name string, destination string,
                                         HashValue: file_hash}
     //Send Request.
     fmt.Println("Downloading metafile of", file_name, "from", destination)
+    log.Println("Downloading metafile of", file_name, "from", destination)
     possible_destinations:= []string{destination}
     meta_reply := gossiper.GetReply(data_request, possible_destinations)
     if file_name != meta_reply.FileName || hex.EncodeToString(file_hash) != hex.EncodeToString(meta_reply.HashValue) {
         fmt.Println("File Name or Hash Value does not match", file_name, meta_reply.FileName)
+        log.Println("File Name or Hash Value does not match", file_name, meta_reply.FileName)
     }
     metadata_hash := sha256.New()
     metadata_hash.Write(meta_reply.Data)
     if hex.EncodeToString(file_hash)!= hex.EncodeToString(metadata_hash.Sum(nil)){
         fmt.Println("Hash of the data does not match Hash Value for file", file_name)
+        log.Println("Hash of the data does not match Hash Value for file", file_name)
     }
     metafile_name := "meta_"+file_name
     metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
     metafile, err := os.Create(metafile_path)
     if err != nil {
         fmt.Println("Unable to create metafile", metafile_path)
+        log.Println("Unable to create metafile", metafile_path)
         return
     }
     metafile.Write(meta_reply.Data)
@@ -460,15 +474,22 @@ func (gossiper *Gossiper) DownloadMetadata(file_name string, destination string,
                                         MetaFileName: metafile_name,
                                         MetaHash: file_hash,
                                         CData: CData}
-    if DEBUG { fmt.Println(CData) }
+    log.Println(CData)
 }
 
 func (gossiper *Gossiper) DownloadFile(file_name string, destination string, file_hash []byte) {
     file_data, metadata_downloaded := gossiper.UploadedFiles[file_name]
     if !metadata_downloaded {
-        if destination == "" { fmt.Println("Insuffucient information, destination missing for", file_name) }
-        if hex.EncodeToString(file_hash) == "" { fmt.Println("Insufficient information, file hash is missing for", file_name) }
+        if destination == "" {
+            fmt.Println("Insuffucient information, destination missing for", file_name)
+            log.Println("Insuffucient information, destination missing for", file_name)
+        }
+        if hex.EncodeToString(file_hash) == "" {
+            fmt.Println("Insufficient information, file hash is missing for", file_name)
+            log.Println("Insufficient information, file hash is missing for", file_name)
+        }
         gossiper.DownloadMetadata(file_name, destination, file_hash)
+        file_data, metadata_downloaded = gossiper.UploadedFiles[file_name]
         for _, chunk_data := range(file_data.CData) {
             chunk_data.Sources[destination] = true
         }
@@ -483,6 +504,7 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
     file, err := os.Create(file_path)
     if err != nil {
         fmt.Println("Unable to create file", file_path)
+        log.Println("Unable to create file", file_path)
         return
     }
     defer file.Close()
@@ -498,20 +520,24 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
         for dest := range chunk.Sources { possible_destinations = append(possible_destinations, dest) }
         reply := gossiper.GetReply(chunk_request, possible_destinations)
         fmt.Println("Downloading", file_name, "chunk", chunk_no+1, "from", reply.Origin)
+        log.Println("Downloading", file_name, "chunk", chunk_no+1, "from", reply.Origin)
         if file_name != reply.FileName || hex.EncodeToString(chunk_hash_req) != hex.EncodeToString(reply.HashValue) {
             fmt.Println("File Name or Hash Value does not match for", file_name)
+            log.Println("File Name or Hash Value does not match for", file_name)
             continue
         }
         chunk_hash := sha256.New()
         chunk_hash.Write(reply.Data)
         if hex.EncodeToString(chunk_hash_req) != hex.EncodeToString(chunk_hash.Sum(nil)) {
             fmt.Println("Hash of the data does not match Hash Value for", file_name)
+            log.Println("Hash of the data does not match Hash Value for", file_name)
             continue
         }
         chunk_path := filepath.Join(SHARING_DIRECTORY, "chunk_"+strconv.Itoa(chunk_no+1)+"_"+file_name)
         chunkfile, err := os.Create(chunk_path)
         if err != nil {
             fmt.Println("Unable to create chunkfile", chunk_path)
+            log.Println("Unable to create chunkfile", chunk_path)
             return
         }
         chunkfile.Write(reply.Data)
@@ -522,7 +548,8 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
         gossiper.UploadedFiles[file_name].FileSize = file_size
     }
     fmt.Println("RECONSTRUCTED file", file_name)
-    if DEBUG { fmt.Println(gossiper.UploadedFiles) }
+    log.Println("RECONSTRUCTED file", file_name)
+    log.Println(gossiper.UploadedFiles)
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
 }
 
@@ -534,8 +561,9 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
     }
     temp_stored_searches := make(map[string]map[uint64]map[string]bool)
     srequest := &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
-    gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
-    timer := time.NewTimer(1*time.Second)
+    //gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
+    gossiper.ForwardSearchReq(srequest, "N/A")
+    timer := time.NewTimer(5*time.Second)
     for {
         sreply_wait := make(chan SReplyReceive, 1)
         reply_wait_obj := SReplyWait{ Key_words: key_words,
@@ -547,10 +575,11 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
                 reply := sreply.SReply
                 file_name := reply.FileName
                 meta_hash := reply.MetafileHash
-                if DEBUG { fmt.Println("SReply received", reply) }
+                log.Println("SReply received", reply)
                 chunk_list := make([]string, len(reply.ChunkMap))
                 for i, chunk_no := range(reply.ChunkMap) { chunk_list[i] = strconv.Itoa(int(chunk_no)) }
                 fmt.Printf("Found match %s at %s budget=%d metafile=%s chunks=%s\n", file_name, origin, budget, hex.EncodeToString(meta_hash), strings.Join(chunk_list, ","))
+                log.Printf("Found match %s at %s budget=%d metafile=%s chunks=%s\n", file_name, origin, budget, hex.EncodeToString(meta_hash), strings.Join(chunk_list, ","))
                 _, metadata_download_triggered := temp_stored_searches[file_name]
                 if !metadata_download_triggered {
                     //Download metafile
@@ -564,14 +593,15 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
                 }
 
             case <-timer.C:
-                if DEBUG { fmt.Println("Timeout waiting for sreply", key_words, budget) }
+                log.Println("Timeout waiting for sreply", key_words, budget)
                 budget = budget*2
                 if budget <= BUDGET_THRESHOLD && increment_budget {
-                    srequest = &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
-                    gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
-                    timer = time.NewTimer(1*time.Second)
+                    //srequest = &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
+                    //gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
+                    gossiper.ForwardSearchReq(srequest, "N/A")
+                    timer = time.NewTimer(5*time.Second)
                 } else {
-                    if DEBUG { fmt.Println("Budget exceeded") }
+                    log.Println("Budget exceeded")
                 }
         }
         reply_wait_obj.Close = true
@@ -583,7 +613,7 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
         matches := 0
         for file_name, chunks := range(temp_stored_searches) {
             file_data, metadata_downloaded := gossiper.UploadedFiles[file_name]
-            if DEBUG { fmt.Println("Search InProgress", file_data, metadata_downloaded) }
+            log.Println("Search InProgress", file_data, metadata_downloaded)
             if !metadata_downloaded { continue }
             if len(file_data.CData) == len(chunks) {
                 matches+=1
@@ -593,12 +623,12 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
         if matches >= 2 {
             break
         }
-        if DEBUG { fmt.Println("Search result", temp_stored_searches) }
+        log.Println("Search result", temp_stored_searches)
     }
 
     for file_name, chunks := range(temp_stored_searches) {
         file_data, metadata_downloaded:= gossiper.UploadedFiles[file_name]
-        if DEBUG { fmt.Println("Search Finished", file_data, metadata_downloaded) }
+        log.Println("Search Finished", file_data, metadata_downloaded)
         if !metadata_downloaded { continue }
         if len(file_data.CData) == len(chunks) {
             WebServerSendChannel<-message.ClientMessage{Operation:"NewFileReply", Message: file_name}
@@ -608,6 +638,7 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
         }
     }
     fmt.Println("SEARCH FINISHED")
+    log.Println("SEARCH FINISHED")
 
 }
 
@@ -653,14 +684,14 @@ func (gossiper *Gossiper) GetReply(chunk_request message.DataRequest, possible_d
         select {
             // Wait for reply or timeout
             case reply = <-reply_wait:
-                if DEBUG { fmt.Println("Reply received", reply) }
+                log.Println("Reply received", reply)
                 // De-register the object from the wait.
                 reply_wait_obj.Close = true
                 gossiper.ReplyWaitChannel<-reply_wait_obj
                 close(reply_wait)
                 return reply
             case <-timer.C:
-                if DEBUG { fmt.Println("Timeout waiting for hash", hex.EncodeToString(file_hash)) }
+                log.Println("Timeout waiting for hash", hex.EncodeToString(file_hash))
         }
     }
 }
@@ -673,6 +704,7 @@ func (gossiper *Gossiper) ServeSearchRequest(srequest *message.SearchRequest) {
             matched, err:=regexp.MatchString(keyword, file_name)
             if err != nil {
                 fmt.Println("Error while matching regex", err)
+                log.Println("Error while matching regex", err)
             }
             if matched {
                 matched_files[file_name] = true
@@ -684,7 +716,7 @@ func (gossiper *Gossiper) ServeSearchRequest(srequest *message.SearchRequest) {
                                        Destination: srequest.Origin,
                                        HopLimit: HOPLIMIT}
         for file_name, _ := range(matched_files) {
-            if DEBUG { fmt.Println("Found match", file_name, srequest) }
+            log.Println("Found match", file_name, srequest)
             file_data := gossiper.UploadedFiles[file_name]
             sresult := &message.SearchResult{FileName: file_name}
             sresult.MetafileHash = file_data.MetaHash
@@ -697,7 +729,7 @@ func (gossiper *Gossiper) ServeSearchRequest(srequest *message.SearchRequest) {
         }
         gossiper.SReplyChannel<-message.GossipMessage{Packet: message.GossipPacket{SReply: &sreply}, Relay_addr: "N/A"}
     } else {
-        if DEBUG { fmt.Println("No match found", srequest, gossiper.UploadedFiles) }
+        log.Println("No match found", srequest, gossiper.UploadedFiles)
     }
     <-timer.C
     gossiper.SRequestWaitChannel<-srequest
@@ -728,10 +760,10 @@ func (gossiper *Gossiper) SendStatus() {
         }
         if gossiper_has_new_msg {
             if NOFORWARD {
-                if DEBUG {
-                    fmt.Println("Not forwarding messages since noforward flag is set") }
+                log.Println("Not forwarding messages since noforward flag is set")
             } else {
                 fmt.Println("MONGERING TEXT to "+relay_addr)
+                log.Println("MONGERING TEXT to "+relay_addr)
                 gossiper.PrintPeers()
                 go gossiper.SendRumor(rumor_msg, relay_addr)
                 //continue
@@ -752,6 +784,7 @@ func (gossiper *Gossiper) SendStatus() {
         }
         if !gossiper_has_new_msg && !remote_has_new_msg {
             fmt.Println("IN SYNC WITH "+relay_addr)
+            log.Println("IN SYNC WITH "+relay_addr)
             gossiper.PrintPeers()
         }
     }
@@ -773,7 +806,7 @@ func (gossiper *Gossiper) GossipMessages() {
             last_port, _ := strconv.Atoi(tmp[1])
             packet.LastIP = &last_ip
             packet.LastPort = &last_port
-            if DEBUG { fmt.Println("Packet:", packet.Origin, packet.ID, packet.Text, *packet.LastIP, *packet.LastPort) }
+            log.Println("Packet:", packet.Origin, packet.ID, packet.Text, *packet.LastIP, *packet.LastPort)
         }
 
         next_id, ok := gossiper.VectorTable[packet.Origin]
@@ -794,8 +827,9 @@ func (gossiper *Gossiper) GossipMessages() {
             }
             if len(peer_list) != 0 && packet.Origin != gossiper.Name {
                 peer_to_send = peer_list[rand.Intn(len(peer_list))]
-                if DEBUG { fmt.Println("Send Route ", packet.Origin, *packet.LastIP, *packet.LastPort, "to ", peer_to_send) }
+                log.Println("Send Route ", packet.Origin, *packet.LastIP, *packet.LastPort, "to ", peer_to_send)
                 fmt.Println("MONGERING ROUTE to "+peer_to_send)
+                log.Println("MONGERING ROUTE to "+peer_to_send)
                 gossiper.SendRumor(packet, peer_to_send)
             }
         } else if packet.ID == next_id {
@@ -806,23 +840,19 @@ func (gossiper *Gossiper) GossipMessages() {
             gossiper.VectorTable[packet.Origin] += 1
             // Notify the WebServer.
             WebServerSendChannel<-message.ClientMessage{Operation:"NewMessage", Message:packet.Text, Origin:packet.Origin}
-            if DEBUG {gossiper.PrintPeers()
-                      fmt.Println("RumorMessages:", gossiper.RumorMessages,
-                        "Vector Table:", gossiper.VectorTable)}
+            log.Println("RumorMessages:", gossiper.RumorMessages,
+                        "Vector Table:", gossiper.VectorTable)
 
-            if NOFORWARD { if DEBUG { fmt.Println("Not forwarding messages since noforward flag is set") }
+            if NOFORWARD { log.Println("Not forwarding messages since noforward flag is set")
             } else { go gossiper.TransmitMessage(channel_packet,
                                                      gossiper.PeerList)
             }
         } else {
             //Discard the message since it is not in order
-            if DEBUG {
-                fmt.Println("Discarding the message", packet.ID,
-                            packet.Origin, packet.Text)
-                gossiper.PrintPeers()
-                fmt.Println("RumorMessages:", gossiper.RumorMessages,
-                            "Vector Table:", gossiper.VectorTable)
-            }
+            log.Println("Discarding the message", packet.ID,
+                        packet.Origin, packet.Text)
+            log.Println("RumorMessages:", gossiper.RumorMessages,
+                        "Vector Table:", gossiper.VectorTable)
         }
 
         if relay_addr != "N/A" { go gossiper.SendAck(relay_addr)}
@@ -834,11 +864,11 @@ func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr str
     hash_value := req.HashValue
     file_data, metadata_present := gossiper.UploadedFiles[file_name]
     if !metadata_present { return false }
-    if DEBUG { fmt.Println(file_data.CData) }
-    if DEBUG { fmt.Println(hex.EncodeToString(hash_value)) }
+    log.Println(file_data.CData)
+    log.Println(hex.EncodeToString(hash_value))
     meta_hash := file_data.MetaHash
     if hex.EncodeToString(meta_hash) == hex.EncodeToString(hash_value) {
-        if DEBUG { fmt.Println("Metadata", hex.EncodeToString(hash_value), "is present") }
+        log.Println("Metadata", hex.EncodeToString(hash_value), "is present")
         go gossiper.SendReply(req.Origin, file_name, 0, relay_addr)
         return true
     }
@@ -848,7 +878,7 @@ func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr str
         if chunk_hash == hex.EncodeToString(hash_value)  && len(chunk_data.Sources) > 0 {
             for source := range(chunk_data.Sources) {
                 if source == gossiper.Name {
-                    if DEBUG { fmt.Println("Chunk", chunk_no+1, ":", hex.EncodeToString(hash_value), "is present") }
+                    log.Println("Chunk", chunk_no+1, ":", hex.EncodeToString(hash_value), "is present")
                     go gossiper.SendReply(req.Origin, file_name, chunk_no+1, relay_addr)
                     return true
                 }
@@ -868,22 +898,24 @@ func (gossiper *Gossiper) GossipReplyMessages() {
         }
         if packet.HopLimit <=0 {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding reply message due to hop limit exceeded:",
-                                   packet.Origin, packet.FileName,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding reply message due to hop limit exceeded:",
+                        packet.Origin, packet.FileName,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
         next_addr, ok := gossiper.NextRoutingTable[packet.Destination]
         if !ok {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding reply message due to no entry in routing table:",
-                                   packet.Origin, packet.FileName,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding reply message due to no entry in routing table:",
+                        packet.Origin, packet.FileName,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
-        if NOFORWARD { fmt.Println("Not forwarding reply message")
+        if NOFORWARD {
+            fmt.Println("Not forwarding reply message")
+            log.Println("Not forwarding reply message")
         } else { go gossiper.SendReplyMessage(packet, next_addr) }
     }
 }
@@ -892,33 +924,35 @@ func (gossiper *Gossiper) GossipRequestMessages() {
     for channel_packet := range gossiper.RequestChannel {
         relay_addr := channel_packet.Relay_addr
         packet  := channel_packet.Packet.Request
-        if DEBUG { fmt.Println("Received request", packet) }
+        log.Println("Received request", packet)
         if gossiper.IsChunkPresent(*packet, relay_addr) {
-            if DEBUG { fmt.Println("Found the requested chunk") }
+            log.Println("Found the requested chunk")
             continue
         }
         if packet.Destination == gossiper.Name {
-            if DEBUG { fmt.Println("File", packet.FileName, "cannot be found on", gossiper.Name) }
+            log.Println("File", packet.FileName, "cannot be found on", gossiper.Name)
             continue
         }
         if packet.HopLimit <=0 {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding request message due to hop limit exceeded:",
-                                   packet.Origin, packet.FileName,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding request message due to hop limit exceeded:",
+                        packet.Origin, packet.FileName,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
         next_addr, ok := gossiper.NextRoutingTable[packet.Destination]
         if !ok {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding request message due to no entry in routing table:",
-                                   packet.Origin, packet.FileName,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding request message due to no entry in routing table:",
+                        packet.Origin, packet.FileName,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
-        if NOFORWARD { fmt.Println("Not forwarding request message")
+        if NOFORWARD {
+            fmt.Println("Not forwarding request message")
+            log.Println("Not forwarding request message")
         } else { go gossiper.SendRequestMessage(packet, next_addr) }
     }
 }
@@ -927,29 +961,30 @@ func (gossiper *Gossiper) GossipSearchRequests() {
     for channel_packet := range gossiper.SRequestChannel {
         relay_addr := channel_packet.Relay_addr
         packet  := channel_packet.Packet.SRequest
-        if DEBUG { fmt.Println("Received srequest", packet) }
+        log.Println("Received srequest", packet)
         is_duplicate_chan := make(chan bool)
         gossiper.SRequestReceiveChannel<- SRequestReceive{ SRequest: packet, IsDuplicate: is_duplicate_chan}
         // Check if it is duplicate packet
         is_duplicate:= <-is_duplicate_chan
         if is_duplicate {
-            if DEBUG { fmt.Println("Discarding due to SRequest already being served") }
+            log.Println("Discarding due to SRequest already being served")
             continue
         } else {
-            if DEBUG { fmt.Println("Not discarding SRequest")}
+            log.Println("Not discarding SRequest")
         }
         gossiper.SRequestWaitChannel<-packet
         go gossiper.ServeSearchRequest(packet)
         // Search if packet is present
         if packet.Budget <=0 {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding due to budget exceeded:",
-                                   packet.Origin, packet.Budget,
-                                   packet.Keywords) }
+            log.Println("Discarding due to budget exceeded:",
+                        packet.Origin, packet.Budget,
+                        packet.Keywords)
             continue
         }
         if NOFORWARD {
             fmt.Println("Not forwarding srequest")
+            log.Println("Not forwarding srequest")
         } else {
             go gossiper.ForwardSearchReq(packet, relay_addr)
         }
@@ -960,7 +995,7 @@ func (gossiper *Gossiper) GossipSearchReply() {
     for channel_packet := range gossiper.SReplyChannel {
         // relay_addr := channel_packet.Relay_addr
         packet  := channel_packet.Packet.SReply
-        if DEBUG { fmt.Println("Received sreply", packet) }
+        log.Println("Received sreply", packet)
         if packet.Destination == gossiper.Name {
             for _, result := range(packet.Results) {
                 sreply:= SReplyReceive{Origin:packet.Origin, SReply: result}
@@ -970,22 +1005,24 @@ func (gossiper *Gossiper) GossipSearchReply() {
         }
         if packet.HopLimit <=0 {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding search reply message due to hop limit exceeded:",
-                                   packet.Origin,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding search reply message due to hop limit exceeded:",
+                        packet.Origin,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
         next_addr, ok := gossiper.NextRoutingTable[packet.Destination]
         if !ok {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding search reply message due to no entry in routing table:",
-                                   packet.Origin,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding search reply message due to no entry in routing table:",
+                        packet.Origin,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
-        if NOFORWARD { fmt.Println("Not forwarding reply message")
+        if NOFORWARD {
+            fmt.Println("Not forwarding reply message")
+            log.Println("Not forwarding reply message")
         } else { go gossiper.SendSearchReply(packet, next_addr) }
     }
 }
@@ -1003,22 +1040,24 @@ func (gossiper *Gossiper) GossipPrivateMessages() {
         }
         if packet.HopLimit <=0 {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding private message due to hop limit exceeded:",
-                                   packet.Origin, packet.Text,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding private message due to hop limit exceeded:",
+                        packet.Origin, packet.Text,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
         next_addr, ok := gossiper.NextRoutingTable[packet.Destination]
         if !ok {
             // Discard the packet.
-            if DEBUG { fmt.Println("Discarding private message due to no entry in routing table:",
-                                   packet.Origin, packet.Text,
-                                   packet.HopLimit,
-                                   packet.Destination) }
+            log.Println("Discarding private message due to no entry in routing table:",
+                        packet.Origin, packet.Text,
+                        packet.HopLimit,
+                        packet.Destination)
             continue
         }
-        if NOFORWARD { fmt.Println("Not forwarding private message")
+        if NOFORWARD {
+            fmt.Println("Not forwarding private message")
+            log.Println("Not forwarding private message")
         } else { go gossiper.SendPrivateMessage(packet, next_addr) }
     }
 }
@@ -1027,7 +1066,8 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
     relay_addr := channel_packet.Relay_addr
     packet  := channel_packet.Packet.Rumor
     if packet.Origin == gossiper.Name || relay_addr == "N/A" { return }
-    if DEBUG { fmt.Println("Received Route rumor about ", packet.Origin, " from ", relay_addr) }
+    log.Println("Received Route rumor about ", packet.Origin,
+                " from ", relay_addr)
     next_seq, ok := gossiper.NextRoutingSeq[packet.Origin]
     is_direct:=false
     if next_seq == packet.ID {
@@ -1037,7 +1077,9 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
     }
     if !ok || (next_seq < packet.ID) || is_direct {
         if is_direct {
-            fmt.Printf("DIRECT-ROUTE FOR %s: %s\n", packet.Origin, relay_addr) }
+            fmt.Printf("DIRECT-ROUTE FOR %s: %s\n", packet.Origin, relay_addr)
+            log.Printf("DIRECT-ROUTE FOR %s: %s\n", packet.Origin, relay_addr)
+        }
         gossiper.NextRoutingSeq[packet.Origin] = packet.ID
         if relay_addr != "N/A" {
             _, ok := gossiper.NextRoutingTable[packet.Origin]
@@ -1046,13 +1088,14 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
                 WebServerSendChannel<-message.ClientMessage{Operation: "NewRoute", Message: packet.Origin}
             }
             fmt.Printf("DSDV %s: %s\n", packet.Origin, relay_addr)
+            log.Printf("DSDV %s: %s\n", packet.Origin, relay_addr)
         }
     }
 }
 
 func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
                                           peer_list_map map[string]bool) {
-    if DEBUG { fmt.Println("Sending message") }
+    log.Println("Sending message")
     last_relay := channel_packet.Relay_addr
     packet := channel_packet.Packet
     for peer, _ := range peer_list_map {
@@ -1069,9 +1112,9 @@ func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
             go gossiper.SendRumor(packet.Rumor, peer)
             select {
                 case <-ack_wait:
-                    if DEBUG { fmt.Println("Ack received") }
+                    log.Println("Ack received")
                 case <-timer.C:
-                    if DEBUG { fmt.Println("Timeout") }
+                    log.Println("Timeout")
                     // De-register the object from the wait.
                     gossiper.AckSendChannel<-ack_wait_obj
             }
@@ -1081,7 +1124,7 @@ func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
 }
 func (gossiper *Gossiper) TransmitMessageWithRumorMongering(channel_packet message.GossipMessage,
                                           peer_list_map map[string]bool) {
-    if DEBUG { fmt.Println("Sending message") }
+    log.Println("Sending message")
     var peer_list []string
     last_relay := channel_packet.Relay_addr
     packet := channel_packet.Packet
@@ -1102,9 +1145,11 @@ func (gossiper *Gossiper) TransmitMessageWithRumorMongering(channel_packet messa
 
         if flipped_coin {
             fmt.Println("FLIPPED COIN sending rumor to "+peer_to_send)
+            log.Println("FLIPPED COIN sending rumor to "+peer_to_send)
             gossiper.PrintPeers()
         } else {
             fmt.Println("MONGERING TEXT to "+peer_to_send)
+            log.Println("MONGERING TEXT to "+peer_to_send)
             gossiper.PrintPeers()
         }
 
@@ -1119,9 +1164,9 @@ func (gossiper *Gossiper) TransmitMessageWithRumorMongering(channel_packet messa
         go gossiper.SendRumor(packet.Rumor, peer_to_send)
         select {
             case <-ack_wait:
-                if DEBUG { fmt.Println("Ack received") }
+                log.Println("Ack received")
             case <-timer.C:
-                if DEBUG { fmt.Println("Timeout") }
+                log.Println("Timeout")
                 // De-register the object from the wait.
                 gossiper.AckSendChannel<-ack_wait_obj
         }
@@ -1133,11 +1178,13 @@ func (gossiper *Gossiper) TransmitMessageWithRumorMongering(channel_packet messa
 
 func (gossiper *Gossiper)SendGossip(packet message.GossipPacket,
                                     peer_to_send string) {
-    if DEBUG { fmt.Println("Peer to send is ", peer_to_send, "Packet to send", packet) }
+    log.Println("Peer to send is ", peer_to_send,
+                "Packet to send", packet)
     packetBytes, proto_err := protobuf.Encode(&packet)
     //fmt.Println("Packet sent", packetBytes)
     if proto_err != nil {
         fmt.Println("Error while sending packet:", packet, proto_err)
+        log.Println("Error while sending packet:", packet, proto_err)
         os.Exit(1)
     }
     udpAddr, _ := net.ResolveUDPAddr("udp", peer_to_send)
@@ -1145,7 +1192,8 @@ func (gossiper *Gossiper)SendGossip(packet message.GossipPacket,
 }
 
 func (gossiper *Gossiper)SendRumor(rumor *message.RumorMessage, peer_to_send string) {
-    if DEBUG { fmt.Println("Send Rumor", rumor.Origin, rumor.ID, rumor.Text, rumor.LastIP, rumor.LastPort) }
+    log.Println("Send Rumor", rumor.Origin, rumor.ID,
+                rumor.Text, rumor.LastIP, rumor.LastPort)
     gossiper.SendGossip(message.GossipPacket{ Rumor: rumor},
                         peer_to_send)
 }
@@ -1158,23 +1206,23 @@ func (gossiper *Gossiper)SendAck(relay_addr string) {
         status_packet.Want = append(status_packet.Want, peer_status)
     }
     // Send Ack
-    if DEBUG { fmt.Println("Send Ack", status_packet) }
+    log.Println("Send Ack", status_packet)
     gossiper.SendGossip(message.GossipPacket{Status: &status_packet},
                         relay_addr)
 }
 
 func (gossiper *Gossiper)SendPrivateMessage(private_msg *message.PrivateMessage, next_addr string) {
-    if DEBUG { fmt.Println("Send PM", private_msg) }
+    log.Println("Send PM", private_msg)
     gossiper.SendGossip(message.GossipPacket{Private: private_msg}, next_addr)
 }
 
 func (gossiper *Gossiper)SendRequestMessage(req *message.DataRequest, next_addr string) {
-    if DEBUG { fmt.Println("Send Request", req) }
+    log.Println("Send Request", req)
     gossiper.SendGossip(message.GossipPacket{Request: req}, next_addr)
 }
 
 func (gossiper *Gossiper) SendReplyMessage(reply *message.DataReply, relay_addr string) {
-    if DEBUG { fmt.Println("Send Reply to ", relay_addr) }
+    log.Println("Send Reply to ", relay_addr)
     gossiper.SendGossip(message.GossipPacket{Reply: reply}, relay_addr)
 }
 
@@ -1194,6 +1242,8 @@ func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_
     file_info, stat_err := file.Stat()
     if open_err!= nil || stat_err != nil {
         fmt.Println("Error while accessing", path, open_err, stat_err)
+        log.Println("Error while accessing", path, open_err, stat_err)
+        return
     }
     file_size := file_info.Size()
     defer file.Close()
@@ -1202,18 +1252,18 @@ func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_
     chunk_reply.Data = data
     chunk_reply.HashValue = hash
 
-    if DEBUG { fmt.Println("Replying to the request for", hash, "to", destination) }
-    //if DEBUG { fmt.Println("Chunk:", string(chunk_reply.Data)) }
+    log.Println("Replying to the request for", hash,
+                "to", destination)
     gossiper.SendReplyMessage(&chunk_reply, relay_addr)
 }
 
 func (gossiper *Gossiper) SendSearchReply(reply *message.SearchReply, relay_addr string) {
-    if DEBUG { fmt.Println("Send Search reply to ", relay_addr) }
+    log.Println("Send Search reply to ", relay_addr)
     gossiper.SendGossip(message.GossipPacket{SReply: reply}, relay_addr)
 }
 
 func (gossiper *Gossiper) SendSearchRequest(search *message.SearchRequest, relay_addr string) {
-    if DEBUG { fmt.Println("Send Search to ", relay_addr) }
+    log.Println("Send Search to ", relay_addr)
     gossiper.SendGossip(message.GossipPacket{SRequest: search}, relay_addr)
 }
 
@@ -1373,11 +1423,13 @@ func (gossiper *Gossiper) AntiEntropy(){
 }
 
 func (gossiper *Gossiper)SendRoute(origin, peer_to_send string) {
-    if DEBUG { fmt.Println("Send Route ", origin, "to ", peer_to_send, "id", gossiper.VectorTable[origin]) }
+    log.Println("Send Route ", origin, "to ", peer_to_send,
+                "id", gossiper.VectorTable[origin])
     packet := &message.RumorMessage{Origin:origin,
                                     ID:gossiper.VectorTable[origin],
                                     Text:""}
     fmt.Println("MONGERING ROUTE to", peer_to_send)
+    log.Println("MONGERING ROUTE to", peer_to_send)
     gossiper.SendRumor(packet, peer_to_send)
 }
 
@@ -1424,7 +1476,7 @@ func main() {
     flag.Parse()
 
     rand.Seed(time.Now().UTC().UnixNano())
-    DEBUG=false
+    DEBUG=true
     PACKET_SIZE = 10*1024
     HOPLIMIT = 10
     BUDGET_THRESHOLD = 32
@@ -1440,11 +1492,25 @@ func main() {
     dir, err := ioutil.TempDir(".", GOSSIP_PORT)
     if err != nil {
         fmt.Println("Failed to create temporary directory", err)
+        log.Println("Failed to create temporary directory", err)
         os.Exit(1)
     }
     defer os.RemoveAll(dir)
     SHARING_DIRECTORY = dir
 
+    //create your file with desired read/write permissions
+    logfile := *name + ".log"
+    f, err := os.OpenFile(logfile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+    if err != nil {
+            log.Fatal(err)
+    }
+    defer f.Close()
+
+    //set output of logs to f
+    log.SetOutput(f)
+
+    //test case
+    log.Println("check to make sure it works")
     var peer_list []string
     if *peers == "" { peer_list = []string{}
     } else { peer_list = strings.Split(*peers, "_") }
@@ -1474,6 +1540,7 @@ func main() {
         sig := <-sigs
         fmt.Println()
         fmt.Println(sig)
+        log.Println(sig)
         done <- true
     }()
     <-done
