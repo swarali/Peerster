@@ -33,7 +33,7 @@ var UI_PORT string
 var GOSSIP_PORT string
 var CHUNK_SIZE int64
 var SHARING_DIRECTORY string
-var BUDGET_THRESHOLD int
+var BUDGET_THRESHOLD uint64
 var MATCH_THRESHOLD int
 var MessageQueue chan message.Message
 var WebServerReceiveChannel chan message.ClientMessage
@@ -516,7 +516,7 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
                                             FileName: file_name,
                                             HashValue: chunk_hash_req}
         //Send Request.
-        possible_destinations:= make([]string, len(chunk.Sources))
+        possible_destinations:= make([]string, 0)
         for dest := range chunk.Sources { possible_destinations = append(possible_destinations, dest) }
         reply := gossiper.GetReply(chunk_request, possible_destinations)
         fmt.Println("Downloading", file_name, "chunk", chunk_no+1, "from", reply.Origin)
@@ -593,9 +593,9 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
                 }
 
             case <-timer.C:
-                log.Println("Timeout waiting for sreply", key_words, budget)
-                budget = budget*2
-                if budget <= BUDGET_THRESHOLD && increment_budget {
+                log.Println("Timeout waiting for sreply", key_words, srequest.Budget)
+                srequest.Budget = srequest.Budget*2
+                if srequest.Budget <= BUDGET_THRESHOLD && increment_budget {
                     //srequest = &message.SearchRequest{Origin: gossiper.Name, Budget: uint64(budget), Keywords: key_words}
                     //gossiper.SRequestChannel<-message.GossipMessage{Packet: message.GossipPacket{SRequest: srequest}, Relay_addr: "N/A"}
                     gossiper.ForwardSearchReq(srequest, "N/A")
@@ -607,7 +607,7 @@ func (gossiper *Gossiper)SearchFiles(budget int, key_words []string) {
         reply_wait_obj.Close = true
         gossiper.SReplyWaitChannel<-reply_wait_obj
         close(sreply_wait)
-        if budget > BUDGET_THRESHOLD || !increment_budget {
+        if srequest.Budget > BUDGET_THRESHOLD || !increment_budget {
             break
         }
         matches := 0
@@ -677,6 +677,7 @@ func (gossiper *Gossiper) GetReply(chunk_request message.DataRequest, possible_d
                                 Reply_wait: reply_wait}
     gossiper.ReplyWaitChannel <- reply_wait_obj
     for {
+        log.Println("Possible destinations:", possible_destinations)
         destination := possible_destinations[rand.Intn(len(possible_destinations))]
         chunk_request.Destination = destination
         gossiper.RequestChannel<-message.GossipMessage{Packet: message.GossipPacket{Request: &chunk_request}, Relay_addr: "N/A"}
@@ -721,7 +722,8 @@ func (gossiper *Gossiper) ServeSearchRequest(srequest *message.SearchRequest) {
             sresult := &message.SearchResult{FileName: file_name}
             sresult.MetafileHash = file_data.MetaHash
             for chunk_no, chunk_data := range(file_data.CData) {
-                if len(chunk_data.Sources) > 0 {
+                chunk_present := chunk_data.Sources[gossiper.Name]
+                if chunk_present {
                     sresult.ChunkMap = append(sresult.ChunkMap, uint64(chunk_no+1))
                 }
             }
