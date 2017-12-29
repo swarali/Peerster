@@ -19,8 +19,8 @@ import (
     "time"
 
     "github.com/dedis/protobuf"
-    "github.com/Swarali/Peerster/part2/message"
-    "github.com/Swarali/Peerster/part2/webserver"
+    "github.com/Swarali/Peerster/message"
+    "github.com/Swarali/Peerster/webserver"
     )
 
 // go run gossiper.go -UIPort=10000 -gossipAddr=127.0.0.1:5000 -name=nodeA -peers=127.0.0.1:5001_10.1.1.7:5002

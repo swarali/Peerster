@@ -6,7 +6,7 @@ import (
     "html/template"
     "net/http"
 
-    "github.com/Swarali/Peerster/part2/message"
+    "github.com/Swarali/Peerster/message"
 )
 
 type Page struct {

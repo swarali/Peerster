@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	"github.com/dedis/protobuf"
-    "github.com/Swarali/Peerster/part2/message"
+    "github.com/Swarali/Peerster/message"
 )
 
 // go run client.go -UIPort=10000 -msg=Hello
