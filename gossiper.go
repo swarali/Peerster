@@ -17,11 +17,13 @@ import (
     "strconv"
     "syscall"
     "time"
+	"math"
 
     "github.com/dedis/protobuf"
     "github.com/Swarali/Peerster/message"
     "github.com/Swarali/Peerster/webserver"
-    )
+	"github.com/Swarali/Peerster/streaming"
+)
 
 // go run gossiper.go -UIPort=10000 -gossipAddr=127.0.0.1:5000 -name=nodeA -peers=127.0.0.1:5001_10.1.1.7:5002
 var DEBUG bool
@@ -32,6 +34,8 @@ var HOPLIMIT uint32
 var UI_PORT string
 var GOSSIP_PORT string
 var CHUNK_SIZE int64
+var STREAMING_SIZE int64
+var ENCODING bool
 var SHARING_DIRECTORY string
 var BUDGET_THRESHOLD uint64
 var MATCH_THRESHOLD int
@@ -67,6 +71,12 @@ type UploadedFile struct {
     MetaFileName string
     MetaHash []byte
     CData []*ChunkData
+    MetaChunk []*MetaData
+}
+
+type MetaData struct {
+	Hash []byte
+	FileName string
 }
 
 type SRequestReceive struct {
@@ -209,7 +219,7 @@ func ReceiveGossipMessage(conn *net.UDPConn) {
 func ReceiveWebClientMessage(name string, peer_list []string, webport string) {
     webserver.WebServerReceiveChannel = WebServerReceiveChannel
     webserver.WebServerSendChannel = WebServerSendChannel
-    go webserver.StartWebServer(name, peer_list, webport)
+    go webserver.StartWebServer(name, peer_list, webport, SHARING_DIRECTORY)
     for message_from_webclient := range WebServerReceiveChannel {
         MessageQueue<-message.Message{ClientMsg:&message_from_webclient}
     }
@@ -357,6 +367,8 @@ func (gossiper *Gossiper)UpdateID(new_id string) {
 }
 
 func (gossiper *Gossiper) UploadFile(file_name string) {
+	if ENCODING { file_name = streaming.EncodeFile(file_name) }
+
     file_path := filepath.Join(SHARING_DIRECTORY, file_name)
     os.Link(filepath.Join("files", file_name), file_path)
     file, err := os.Open(file_path)
@@ -367,6 +379,11 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
     defer file.Close()
     file_info, _ := file.Stat()
     file_size := file_info.Size()
+
+    var o_metafile *os.File
+    var metaChunk []*MetaData
+    var o_metafile_name string
+    var chunk_hash []byte
 
     metafile_name := "meta_"+file_name
     metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
@@ -404,12 +421,38 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
         }
         chunk_file.Close()
 
+        if math.Mod(float64(chunk_no - 1),250) == 0 {
+        	o_metafile_name = fmt.Sprintf("meta_%v_%s", float64(chunk_no - 1) / 250.0, file_name)
+			o_metafile_path := filepath.Join(SHARING_DIRECTORY, o_metafile_name)
+			o_metafile, err = os.Create(o_metafile_path)
+
+			if err != nil {
+				fmt.Println("Unable to create metafile", o_metafile_path)
+				log.Println("Unable to create metafile", o_metafile_path)
+				return
+			}
+
+			defer o_metafile.Close()
+		}
+
         //Calculate and append SHA of the chunk
         h := sha256.New()
         h.Write(chunk)
-        chunk_hash := h.Sum(nil)
+        chunk_hash = h.Sum(nil)
         metafile.Write(chunk_hash)
+		o_metafile.Write(chunk_hash)
         metadata_hash.Write(chunk_hash)
+
+		if math.Mod(float64(chunk_no - 1),250) == 249 {
+			new_hash := make([]byte, 32)
+			copy(new_hash, chunk_hash)
+			o := sha256.New()
+			o.Write(new_hash)
+			new_hash = o.Sum(nil)
+			metaChunk = append(metaChunk, &MetaData{ Hash: new_hash,
+			          								 FileName: o_metafile_name })
+		}
+
         chunk_data := &ChunkData{Hash: chunk_hash, Sources: make(map[string]bool)}
         chunk_data.Sources[gossiper.Name] = true
         cdata = append(cdata, chunk_data)
@@ -419,14 +462,73 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
         chunk_no+=1
     }
 
+	new_hash := make([]byte, 32)
+	copy(new_hash, chunk_hash)
+	o := sha256.New()
+	o.Write(new_hash)
+	new_hash = o.Sum(nil)
+	metaChunk = append(metaChunk, &MetaData{ Hash: new_hash,
+											 FileName: o_metafile_name })
+
     //Calculate SHA of metafile
     metafile_hash := metadata_hash.Sum(nil)
+
+	//fmt.Printf("FINAL CODED: %x %v \n", metafile_hash, len(metafile_hash))
+
     gossiper.UploadedFiles[file_name] = &UploadedFile{FileSize: file_size,
                                         MetaFileName: metafile_name,
                                         MetaHash: metafile_hash,
+                                        MetaChunk: metaChunk,
                                         CData: cdata}
+
+	createSizeFile(file_name, file_size)
+
     log.Println("Uploaded and chunked file:", file_name, "into", chunk_no, ":", gossiper.UploadedFiles[file_name])
     WebServerSendChannel<-message.ClientMessage{Operation:"NewFileUpload", Message: file_name}
+}
+
+func createSizeFile(file_name string, size int64) {
+	file_name = fmt.Sprintf("size_%s", file_name)
+	file_path := filepath.Join(SHARING_DIRECTORY, file_name)
+	file, err := os.Create(file_path)
+
+	if err != nil {
+		fmt.Println("Unable to create metafile", file_path)
+		log.Println("Unable to create metafile", file_path)
+		return
+	}
+
+	file.Write([]byte(strconv.Itoa(int(size))))
+
+	defer file.Close()
+}
+
+func GetLastHash(reply *message.DataReply, file_name string, file_hash []byte, index int, f_metafile *os.File) ([]byte , string) {
+	if file_name != reply.FileName || hex.EncodeToString(file_hash) != hex.EncodeToString(reply.HashValue) {
+		fmt.Println("File Name or Hash Value does not match", file_name, reply.FileName)
+		log.Println("File Name or Hash Value does not match", file_name, reply.FileName)
+	}
+
+	metafile_name := fmt.Sprintf("meta_%v_%s", index, file_name)
+	metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
+	metafile, err := os.Create(metafile_path)
+	if err != nil {
+		fmt.Println("Unable to create metafile", metafile_path)
+		log.Println("Unable to create metafile", metafile_path)
+		return nil, ""
+	}
+	metafile.Write(reply.Data)
+	metafile.Close()
+
+	f_metafile.Write(reply.Data)
+
+	new_hash := make([]byte, 32)
+	copy(new_hash, reply.Data[len(reply.Data) - 32 : len(reply.Data)])
+	o := sha256.New()
+	o.Write(new_hash)
+	new_hash = o.Sum(nil)
+
+	return new_hash, metafile_name
 }
 
 func (gossiper *Gossiper) DownloadMetadata(file_name string, destination string, file_hash []byte) {
@@ -438,43 +540,71 @@ func (gossiper *Gossiper) DownloadMetadata(file_name string, destination string,
     fmt.Println("Downloading metafile of", file_name, "from", destination)
     log.Println("Downloading metafile of", file_name, "from", destination)
     possible_destinations:= []string{destination}
-    meta_reply := gossiper.GetReply(data_request, possible_destinations)
-    if file_name != meta_reply.FileName || hex.EncodeToString(file_hash) != hex.EncodeToString(meta_reply.HashValue) {
-        fmt.Println("File Name or Hash Value does not match", file_name, meta_reply.FileName)
-        log.Println("File Name or Hash Value does not match", file_name, meta_reply.FileName)
-    }
-    metadata_hash := sha256.New()
-    metadata_hash.Write(meta_reply.Data)
-    if hex.EncodeToString(file_hash)!= hex.EncodeToString(metadata_hash.Sum(nil)){
-        fmt.Println("Hash of the data does not match Hash Value for file", file_name)
-        log.Println("Hash of the data does not match Hash Value for file", file_name)
-    }
-    metafile_name := "meta_"+file_name
-    metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
-    metafile, err := os.Create(metafile_path)
-    if err != nil {
-        fmt.Println("Unable to create metafile", metafile_path)
-        log.Println("Unable to create metafile", metafile_path)
-        return
-    }
-    metafile.Write(meta_reply.Data)
-    metafile.Close()
 
-    chunk_no:= 0
-    chunk_metadata := meta_reply.Data
+    //meta_reply := gossiper.GetReply(data_request, possible_destinations)
+	//
+    //total_seq := meta_reply.Seq
+
+	metafile_name := "meta_" + file_name
+	metafile_path := filepath.Join(SHARING_DIRECTORY, metafile_name)
+	metafile, err := os.Create(metafile_path)
+	if err != nil {
+		fmt.Println("Unable to create metafile", metafile_path)
+		log.Println("Unable to create metafile", metafile_path)
+		return
+	}
+
+	var metaChunk []*MetaData
+	var total_seq = 1
+	var real_size int64
+
+	for i := 0; i < total_seq; i++ {
+		meta_reply := gossiper.GetReply(data_request, possible_destinations)
+		total_seq = meta_reply.Seq
+		real_size = meta_reply.Size
+
+		last_hash, name := GetLastHash(meta_reply, file_name, file_hash, i, metafile)
+		metaChunk = append(metaChunk, &MetaData{ Hash: last_hash, FileName: name })
+
+		data_request = message.DataRequest{Origin: gossiper.Name,
+			HopLimit: HOPLIMIT,
+			FileName: file_name,
+			HashValue: last_hash}
+	}
+
+	//Verify MetaParts
+	metafile, _ = os.Open(metafile_path)
+	metafile_info, _ := metafile.Stat()
+	file_size := metafile_info.Size()
+	data := make([]byte, file_size)
+	metafile.Read(data)
+
+    //chunk_no:= 0
+    chunk_metadata := data
     CData := make([]*ChunkData, len(chunk_metadata)/32)
-    for {
-        if len(chunk_metadata) <= 32*chunk_no { break }
-        chunk_hash:= chunk_metadata[32*chunk_no: 32*chunk_no+32]
-        chunk_data := &ChunkData{Hash: chunk_hash, Sources: make(map[string]bool)}
-        CData[chunk_no] = chunk_data
-        chunk_no+=1
-    }
-    gossiper.UploadedFiles[file_name] = &UploadedFile{
+    //for {
+    //    if len(chunk_metadata) <= 32*chunk_no { break }
+    //    chunk_hash:= chunk_metadata[32*chunk_no: 32*chunk_no+32]
+    //    chunk_data := &ChunkData{Hash: chunk_hash, Sources: make(map[string]bool)}
+    //    CData[chunk_no] = chunk_data
+    //    chunk_no+=1
+    //}
+
+    for chunk_no := 0; chunk_no < len(CData); chunk_no++ {
+		chunk_hash := chunk_metadata[32 * chunk_no: 32 * (chunk_no + 1)]
+		chunk_data := &ChunkData{Hash: chunk_hash, Sources: make(map[string]bool)}
+		CData[chunk_no] = chunk_data
+	}
+
+	createSizeFile(file_name, real_size)
+
+    gossiper.UploadedFiles[file_name] = &UploadedFile{FileSize: real_size,
                                         MetaFileName: metafile_name,
                                         MetaHash: file_hash,
+                                        MetaChunk: metaChunk,
                                         CData: CData}
-    log.Println(CData)
+
+    log.Println("CData:", CData)
 }
 
 func (gossiper *Gossiper) DownloadFile(file_name string, destination string, file_hash []byte) {
@@ -517,7 +647,9 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
                                             HashValue: chunk_hash_req}
         //Send Request.
         possible_destinations:= make([]string, 0)
-        for dest := range chunk.Sources { possible_destinations = append(possible_destinations, dest) }
+        for dest := range chunk.Sources {
+        	possible_destinations = append(possible_destinations, dest)
+		}
         reply := gossiper.GetReply(chunk_request, possible_destinations)
         fmt.Println("Downloading", file_name, "chunk", chunk_no+1, "from", reply.Origin)
         log.Println("Downloading", file_name, "chunk", chunk_no+1, "from", reply.Origin)
@@ -547,6 +679,8 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
         file_size+=int64(len(reply.Data))
         gossiper.UploadedFiles[file_name].FileSize = file_size
     }
+    createSizeFile(file_name, file_size)
+
     fmt.Println("RECONSTRUCTED file", file_name)
     log.Println("RECONSTRUCTED file", file_name)
     log.Println(gossiper.UploadedFiles)
@@ -681,7 +815,7 @@ func (gossiper *Gossiper) GetReply(chunk_request message.DataRequest, possible_d
         destination := possible_destinations[rand.Intn(len(possible_destinations))]
         chunk_request.Destination = destination
         gossiper.RequestChannel<-message.GossipMessage{Packet: message.GossipPacket{Request: &chunk_request}, Relay_addr: "N/A"}
-        timer := time.NewTimer(5*time.Second)
+        timer := time.NewTimer(60*time.Second)
         select {
             // Wait for reply or timeout
             case reply = <-reply_wait:
@@ -861,6 +995,16 @@ func (gossiper *Gossiper) GossipMessages() {
     }
 }
 
+func (gossiper *Gossiper) IndexMetaChunk(file_name string, hash []byte) int {
+	for i := range gossiper.UploadedFiles[file_name].MetaChunk {
+		if hex.EncodeToString(gossiper.UploadedFiles[file_name].MetaChunk[i].Hash) == hex.EncodeToString(hash) {
+			return i
+		}
+	}
+
+	return -1
+}
+
 func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr string) bool{
     file_name := req.FileName
     hash_value := req.HashValue
@@ -869,19 +1013,36 @@ func (gossiper *Gossiper) IsChunkPresent(req message.DataRequest, relay_addr str
     log.Println(file_data.CData)
     log.Println(hex.EncodeToString(hash_value))
     meta_hash := file_data.MetaHash
+
+    // Metahash found
     if hex.EncodeToString(meta_hash) == hex.EncodeToString(hash_value) {
         log.Println("Metadata", hex.EncodeToString(hash_value), "is present")
-        go gossiper.SendReply(req.Origin, file_name, 0, relay_addr)
+
+        meta_no := -1
+
+        if len(gossiper.UploadedFiles[file_name].MetaChunk) > 1 { meta_no = 0 }
+
+        go gossiper.SendReply(req.Origin, file_name, 0, relay_addr, meta_no)
         return true
     }
 
+	// MetaParts Found
+    index := gossiper.IndexMetaChunk(file_name, hash_value)
+
+    if  index != -1 && len(gossiper.UploadedFiles[file_name].MetaChunk) > 1 {
+		log.Println("Metadata Part", index, hex.EncodeToString(hash_value), "is present")
+    	go gossiper.SendReply(req.Origin, file_name, 0, relay_addr, index + 1)
+    	return true
+	}
+
+    // Chunks found
     for chunk_no, chunk_data := range file_data.CData {
         chunk_hash := hex.EncodeToString(chunk_data.Hash)
         if chunk_hash == hex.EncodeToString(hash_value)  && len(chunk_data.Sources) > 0 {
             for source := range(chunk_data.Sources) {
                 if source == gossiper.Name {
                     log.Println("Chunk", chunk_no+1, ":", hex.EncodeToString(hash_value), "is present")
-                    go gossiper.SendReply(req.Origin, file_name, chunk_no+1, relay_addr)
+                    go gossiper.SendReply(req.Origin, file_name, chunk_no+1, relay_addr, -1)
                     return true
                 }
             }
@@ -1228,14 +1389,27 @@ func (gossiper *Gossiper) SendReplyMessage(reply *message.DataReply, relay_addr 
     gossiper.SendGossip(message.GossipPacket{Reply: reply}, relay_addr)
 }
 
-func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_no int, relay_addr string) {
-    chunk_reply := message.DataReply{Origin: gossiper.Name, Destination:destination, FileName: file_name, HopLimit: HOPLIMIT}
+func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_no int, relay_addr string, meta_no int) {
+    chunk_reply := message.DataReply{Origin: gossiper.Name, Destination:destination,
+    FileName: file_name, HopLimit: HOPLIMIT, Seq: len(gossiper.UploadedFiles[file_name].MetaChunk),
+    Size: gossiper.UploadedFiles[file_name].FileSize }
+
     var path string
     var hash []byte
     if chunk_no == 0 {
-        // Return metadata file
-        path = filepath.Join(SHARING_DIRECTORY, "meta_"+file_name)
-        hash = gossiper.UploadedFiles[file_name].MetaHash
+    	if meta_no == -1 {
+			// Return metadata file
+			path = filepath.Join(SHARING_DIRECTORY, "meta_" + file_name)
+			hash = gossiper.UploadedFiles[file_name].MetaHash
+		} else {
+			// Return metadata part file
+			path = filepath.Join(SHARING_DIRECTORY, fmt.Sprintf("meta_%v_%s", meta_no, file_name))
+			if meta_no == 0 {
+				hash = gossiper.UploadedFiles[file_name].MetaHash
+			} else {
+				hash = gossiper.UploadedFiles[file_name].MetaChunk[meta_no - 1].Hash
+			}
+		}
     } else {
         path =filepath.Join(SHARING_DIRECTORY, "chunk_"+strconv.Itoa(chunk_no)+"_"+file_name)
         hash = gossiper.UploadedFiles[file_name].CData[chunk_no-1].Hash
@@ -1475,6 +1649,9 @@ func main() {
     var rtimer = flag.Int("rtimer", 60, "Number of seconds to wait between 2 rumor messsages")
     var noforward = flag.Bool("noforward", false, "Set if the node should not forward messages to other nodes")
     var chunk_size = flag.Int64("chunk", 8*(1<<10), "File chunk size")
+	var streaming_size = flag.Int64("streaming", 1024*(1<<10), "File streaming size")
+	var encoding = flag.Bool("encoding", true, "Set if the node should encode video files")
+
     flag.Parse()
 
     rand.Seed(time.Now().UTC().UnixNano())
@@ -1491,6 +1668,9 @@ func main() {
     GOSSIP_PORT = *gossipPort
     UI_PORT =*ui_port
     CHUNK_SIZE = *chunk_size
+    STREAMING_SIZE = *streaming_size
+    ENCODING = *encoding
+
     dir, err := ioutil.TempDir(".", GOSSIP_PORT)
     if err != nil {
         fmt.Println("Failed to create temporary directory", err)

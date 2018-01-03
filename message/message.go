@@ -43,6 +43,8 @@ type DataReply struct {
     FileName string
     HashValue []byte
     Data []byte
+	Seq int
+	Size int64
 }
 
 type SearchRequest  struct {
