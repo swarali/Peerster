@@ -78,18 +78,19 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 		if open_err!= nil || stat_err != nil {
 			fmt.Println("Error while accessing", size_path, open_err, stat_err)
 			log.Println("Error while accessing", size_path, open_err, stat_err)
-			return
+
+			real_size = int64(0)
+		} else {
+			size_file_size := size_info.Size()
+
+			data := make([]byte, size_file_size)
+
+			size_file.Read(data)
+
+			varr, _ := strconv.Atoi(string(data))
+
+			real_size = int64(varr)
 		}
-
-		size_file_size := size_info.Size()
-
-		data := make([]byte, size_file_size)
-
-		size_file.Read(data)
-
-		varr, _ := strconv.Atoi(string(data))
-
-		real_size = int64(varr)
 	}
 
 	info := make(map[string]FileMeta)

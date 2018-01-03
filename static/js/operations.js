@@ -137,7 +137,7 @@ function operations() {
     function verifyFile(data, fileName) {
         var proportion = data[fileName].RealSize / data[fileName].Size;
 
-        if (data[fileName].Exists && data[fileName].Size > 1048576) {
+        if (data[fileName].Exists && data[fileName].Size > 2097152 && data[fileName].RealSize != 0) {
             playerChunks(fileName, data[fileName].RealSize);
             console.log("FILE SIZE: " + data[fileName].Size);
             console.log("REAL FILE SIZE: " + data[fileName].RealSize);

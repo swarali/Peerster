@@ -473,7 +473,7 @@ func (gossiper *Gossiper) UploadFile(file_name string) {
     //Calculate SHA of metafile
     metafile_hash := metadata_hash.Sum(nil)
 
-	//fmt.Printf("FINAL CODED: %x %v \n", metafile_hash, len(metafile_hash))
+	fmt.Printf("FINAL CODED: %x %v \n", metafile_hash, len(metafile_hash))
 
     gossiper.UploadedFiles[file_name] = &UploadedFile{FileSize: file_size,
                                         MetaFileName: metafile_name,
