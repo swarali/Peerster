@@ -9,6 +9,7 @@ type RumorMessage struct {
     Text string
     LastIP *net.IP
     LastPort *int
+    PublicKey string
 }
 
 type PeerStatus struct {
@@ -66,6 +67,11 @@ type SearchReply struct {
     Results []*SearchResult
 }
 
+type SignatureMessage struct {
+    Sign string
+    By string
+}
+
 type GossipPacket struct {
     Rumor *RumorMessage
     Status *StatusPacket
@@ -74,6 +80,7 @@ type GossipPacket struct {
     Reply *DataReply
     SRequest *SearchRequest
     SReply *SearchReply
+    Signature *SignatureMessage
 }
 
 type GossipMessage struct {

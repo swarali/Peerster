@@ -22,6 +22,7 @@ import (
     "github.com/dedis/protobuf"
     "github.com/Swarali/Peerster/message"
     "github.com/Swarali/Peerster/webserver"
+    "github.com/Swarali/Peerster/security"
 	"github.com/Swarali/Peerster/streaming"
 )
 
@@ -212,6 +213,26 @@ func ReceiveGossipMessage(conn *net.UDPConn) {
         }
         gossip_msg := &message.GossipMessage{Packet:*packet,
                                             Relay_addr:relay_addr}
+
+        // Allow messages for processing only if the message has been signed from the trusted public keys.
+        signature_message := packet.Signature
+        if signature_message == nil {
+            // This should never happen. Every message should be signed
+            log.Println("No signature found for packet: ", packet)
+            continue
+        } else {
+            // Process only those packets that are verified or that are route rumor message for public keys.
+            verified := security.VerifyPacket(packet)
+            is_route_rmr_msg := false
+            if packet.Rumor != nil && packet.Rumor.Text == "" && packet.Rumor.PublicKey != "" {
+                is_route_rmr_msg = true
+            }
+            if !verified && !is_route_rmr_msg {
+                log.Println("Dropping packet since it is not verifiable")
+                continue
+            }
+        }
+
         MessageQueue<-message.Message{GossipMsg: gossip_msg}
     }
 }
@@ -255,7 +276,8 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
                 gossip_packet.SReply.HopLimit -=1
                 channel = gossiper.SReplyChannel
             }
-            gossiper.UpdatePeer(relay_addr)
+            // Do not update peerlist for Peers directly connected to them.
+            //gossiper.UpdatePeer(relay_addr)
         } else {
             operation := msg.ClientMsg.Operation
             client_msg := msg.ClientMsg.Message
@@ -954,6 +976,8 @@ func (gossiper *Gossiper) GossipMessages() {
 
         gossiper.UpdateRoutingTable(channel_packet)
         if packet.Text == "" {
+            // We send public key through route rumor messages only therefore no need to update public keys for other kind of rumor messages.
+            gossiper.UpdatePeerPublicKeys(channel_packet)
             var peer_to_send string
             var peer_list []string
             last_relay := channel_packet.Relay_addr
@@ -961,12 +985,18 @@ func (gossiper *Gossiper) GossipMessages() {
                 if peer != last_relay {
                 peer_list = append(peer_list, peer) }
             }
-            if len(peer_list) != 0 && packet.Origin != gossiper.Name {
+
+            // Check if the relay is a trusted relay
+            _, relay_trusted := gossiper.PeerList[last_relay]
+            if relay_trusted && len(peer_list) != 0 && packet.Origin != gossiper.Name {
+                security.AddorUpdatePublicKey(packet.Origin, packet.PublicKey)
                 peer_to_send = peer_list[rand.Intn(len(peer_list))]
                 log.Println("Send Route ", packet.Origin, *packet.LastIP, *packet.LastPort, "to ", peer_to_send)
                 fmt.Println("MONGERING ROUTE to "+peer_to_send)
                 log.Println("MONGERING ROUTE to "+peer_to_send)
                 gossiper.SendRumor(packet, peer_to_send)
+            } else if !relay_trusted {
+                log.Println("Peer", last_relay, " is not in the trusted peer list")
             }
         } else if packet.ID == next_id {
             // Update messages only if the message is non-empty.
@@ -1256,6 +1286,9 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
     }
 }
 
+func (gossiper *Gossiper) UpdatePeerPublicKeys(channel_packet message.GossipMessage) {
+}
+
 func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,
                                           peer_list_map map[string]bool) {
     log.Println("Sending message")
@@ -1341,6 +1374,10 @@ func (gossiper *Gossiper) TransmitMessageWithRumorMongering(channel_packet messa
 
 func (gossiper *Gossiper)SendGossip(packet message.GossipPacket,
                                     peer_to_send string) {
+    if packet.Signature == nil{
+        sign := security.SignPacket(&packet)
+        packet.Signature = &message.SignatureMessage{Sign: sign, By: gossiper.Name}
+    }
     log.Println("Peer to send is ", peer_to_send,
                 "Packet to send", packet)
     packetBytes, proto_err := protobuf.Encode(&packet)
@@ -1603,7 +1640,8 @@ func (gossiper *Gossiper)SendRoute(origin, peer_to_send string) {
                 "id", gossiper.VectorTable[origin])
     packet := &message.RumorMessage{Origin:origin,
                                     ID:gossiper.VectorTable[origin],
-                                    Text:""}
+                                    Text:"",
+                                    PublicKey: security.PUBLIC_KEY_TEXT}
     fmt.Println("MONGERING ROUTE to", peer_to_send)
     log.Println("MONGERING ROUTE to", peer_to_send)
     gossiper.SendRumor(packet, peer_to_send)
@@ -1690,6 +1728,9 @@ func main() {
 
     //set output of logs to f
     log.SetOutput(f)
+
+    //initialise security keys
+    security.InitKeys(dir, *name)
 
     //test case
     log.Println("check to make sure it works")
