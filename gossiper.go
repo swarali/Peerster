@@ -113,6 +113,7 @@ type Gossiper struct {
     PrivateMessages map[string][]string
     UploadedFiles map[string]*UploadedFile
     PeerList map[string]bool
+    TrustedPeerList map[string]bool
     AckReceiveChannel chan string
     AckSendChannel chan AckWait
     ReplyWaitChannel chan ReplyWait
@@ -126,7 +127,11 @@ type Gossiper struct {
 func NewGossiper(name, webport string,
                  peer_list []string) *Gossiper {
     peer_list_map := make(map[string]bool)
-    for _, peer := range peer_list { peer_list_map[peer] = true }
+    trusted_peer_list_map := make(map[string]bool)
+    for _, peer := range peer_list {
+        peer_list_map[peer] = true
+        trusted_peer_list_map[peer] = true
+    }
     client_conn := ListenOn("127.0.0.1:" + UI_PORT)
     gossip_conn := ListenOn(GOSSIP_PORT)
 
@@ -148,6 +153,7 @@ func NewGossiper(name, webport string,
                           PrivateMessages: make(map[string][]string),
                           UploadedFiles: make(map[string]*UploadedFile),
                           PeerList: peer_list_map,
+                          TrustedPeerList: trusted_peer_list_map,
                           AckReceiveChannel: make(chan string),
                           AckSendChannel: make(chan AckWait),
                           ReplyWaitChannel: make(chan ReplyWait),
@@ -228,7 +234,7 @@ func ReceiveGossipMessage(conn *net.UDPConn) {
                 is_route_rmr_msg = true
             }
             if !verified && !is_route_rmr_msg {
-                log.Println("Dropping packet since it is not verifiable")
+                log.Println("Dropping packet since it is not verifiable", packet)
                 continue
             }
         }
@@ -277,7 +283,7 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
                 channel = gossiper.SReplyChannel
             }
             // Do not update peerlist for Peers directly connected to them.
-            //gossiper.UpdatePeer(relay_addr)
+            gossiper.UpdatePeer(relay_addr)
         } else {
             operation := msg.ClientMsg.Operation
             client_msg := msg.ClientMsg.Message
@@ -286,6 +292,9 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
                 continue
             } else if operation == "NewPeer" {
                 gossiper.UpdatePeer(client_msg)
+                continue
+            } else if operation == "NewTrustedPeer" {
+                gossiper.UpdateTrustedPeer(client_msg)
                 continue
             } else if operation == "NewFileUpload" {
                 go gossiper.UploadFile(client_msg)
@@ -378,6 +387,17 @@ func (gossiper *Gossiper)UpdatePeer(relay_addr string) {
         log.Println("Updating Peer: ", relay_addr)
         gossiper.PeerList[relay_addr] = true
         WebServerSendChannel<-message.ClientMessage{Operation:"NewPeer", Message: relay_addr}
+    }
+}
+
+func (gossiper *Gossiper)UpdateTrustedPeer(relay_addr string) {
+    if relay_addr == "N/A" { return }
+    if relay_addr == GOSSIP_PORT { return }
+    _, peer_exists := gossiper.TrustedPeerList[relay_addr]
+    if peer_exists == false {
+        log.Println("Updating Trusted Peer: ", relay_addr)
+        gossiper.TrustedPeerList[relay_addr] = true
+        WebServerSendChannel<-message.ClientMessage{Operation:"NewTrustedPeer", Message: relay_addr}
     }
 }
 
@@ -966,6 +986,13 @@ func (gossiper *Gossiper) GossipMessages() {
             packet.LastPort = &last_port
             log.Println("Packet:", packet.Origin, packet.ID, packet.Text, *packet.LastIP, *packet.LastPort)
         }
+        // Check if the relay is a trusted relay
+        _, relay_trusted := gossiper.TrustedPeerList[relay_addr]
+        if packet.Text == "" && ! relay_trusted {
+            // We send public key through route rumor messages only therefore no need to update public keys for other kind of rumor messages.
+            log.Println("Peer", relay_addr, " is not in the trusted peer list")
+            continue
+        }
 
         next_id, ok := gossiper.VectorTable[packet.Origin]
         if !ok {
@@ -976,8 +1003,7 @@ func (gossiper *Gossiper) GossipMessages() {
 
         gossiper.UpdateRoutingTable(channel_packet)
         if packet.Text == "" {
-            // We send public key through route rumor messages only therefore no need to update public keys for other kind of rumor messages.
-            gossiper.UpdatePeerPublicKeys(channel_packet)
+            security.AddorUpdatePublicKey(packet.Origin, packet.PublicKey)
             var peer_to_send string
             var peer_list []string
             last_relay := channel_packet.Relay_addr
@@ -986,17 +1012,12 @@ func (gossiper *Gossiper) GossipMessages() {
                 peer_list = append(peer_list, peer) }
             }
 
-            // Check if the relay is a trusted relay
-            _, relay_trusted := gossiper.PeerList[last_relay]
-            if relay_trusted && len(peer_list) != 0 && packet.Origin != gossiper.Name {
-                security.AddorUpdatePublicKey(packet.Origin, packet.PublicKey)
+            if len(peer_list) != 0 && packet.Origin != gossiper.Name {
                 peer_to_send = peer_list[rand.Intn(len(peer_list))]
                 log.Println("Send Route ", packet.Origin, *packet.LastIP, *packet.LastPort, "to ", peer_to_send)
                 fmt.Println("MONGERING ROUTE to "+peer_to_send)
                 log.Println("MONGERING ROUTE to "+peer_to_send)
                 gossiper.SendRumor(packet, peer_to_send)
-            } else if !relay_trusted {
-                log.Println("Peer", last_relay, " is not in the trusted peer list")
             }
         } else if packet.ID == next_id {
             // Update messages only if the message is non-empty.
@@ -1284,9 +1305,6 @@ func (gossiper *Gossiper) UpdateRoutingTable(channel_packet message.GossipMessag
             log.Printf("DSDV %s: %s\n", packet.Origin, relay_addr)
         }
     }
-}
-
-func (gossiper *Gossiper) UpdatePeerPublicKeys(channel_packet message.GossipMessage) {
 }
 
 func (gossiper *Gossiper) TransmitMessage(channel_packet message.GossipMessage,

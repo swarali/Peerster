@@ -16,6 +16,7 @@ import (
 type Page struct {
     Name string
     Peers []string
+    TrustedPeers []string
     Messages []string
     PrivateMessages map[string][]string
     KnownRoutes []string
@@ -121,7 +122,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 func StartWebServer(name string, peer_list []string, webport string, sharing_dir string) {
     SHARING_DIR = sharing_dir
 
-	IndexPage = &Page{Name: name, Peers: peer_list, PrivateMessages: make(map[string][]string), FoundFiles: make(map[string]bool)}
+	IndexPage = &Page{Name: name, Peers: peer_list, TrustedPeers: peer_list, PrivateMessages: make(map[string][]string), FoundFiles: make(map[string]bool)}
     //fmt.Println("Starting Web Server")
     http.HandleFunc("/", index_handler)
     http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
@@ -137,6 +138,8 @@ func StartWebServer(name string, peer_list []string, webport string, sharing_dir
         msg := message_to_webclient.Message
         if operation == "NewPeer" {
             IndexPage.Peers = append(IndexPage.Peers, msg)
+        } else if operation == "NewTrustedPeer" {
+            IndexPage.TrustedPeers = append(IndexPage.TrustedPeers, msg)
         } else if operation == "NewID" {
             IndexPage.Name = msg
         } else if operation == "NewMessage" {

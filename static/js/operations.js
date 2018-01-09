@@ -24,6 +24,18 @@ function operations() {
             });
             $("#peer").val('').attr('value','')
         });
+        $("#trusted_peerbtn").click(function(){
+            $.ajax
+            ({
+                url: '/id',
+                type: "POST",
+                contentType: "application/x-www-form-urlencoded",
+                dataType: "json",
+                data: {Operation: "NewTrustedPeer",
+                    Message: $("#trusted_peer").val()}
+            });
+            $("#trusted_peer").val('').attr('value','')
+        });
         $("#msgbtn").click(function(){
             $.ajax
             ({

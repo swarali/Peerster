@@ -26,7 +26,12 @@
         {{ $value }},
         {{ end }}</strong><br>
         <input class="webinput" id="peer" type="text" name="peer">
-        <input class="webbtn" id="peerbtn" type="submit" value="Add Peer">
+        <input class="webbtn" id="peerbtn" type="submit" value="Add Peer"><br>
+        TrustedPeers: <strong>{{ range $key, $value := .TrustedPeers }}
+        {{ $value }},
+        {{ end }}</strong><br>
+        <input class="webinput" id="trusted_peer" type="text" name="trusted_peer">
+        <input class="webbtn" id="trusted_peerbtn" type="submit" value="Add Trusted Peer">
     </div>
 
     <div>
