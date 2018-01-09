@@ -1706,7 +1706,7 @@ func main() {
     var noforward = flag.Bool("noforward", false, "Set if the node should not forward messages to other nodes")
     var chunk_size = flag.Int64("chunk", 8*(1<<10), "File chunk size")
 	var streaming_size = flag.Int64("streaming", 1024*(1<<10), "File streaming size")
-	var encoding = flag.Bool("encoding", true, "Set if the node should encode video files")
+	var encoding = flag.Bool("encoding", false, "Set if the node should encode video files")
 
     flag.Parse()
 
