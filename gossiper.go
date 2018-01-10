@@ -322,7 +322,7 @@ func (gossiper *Gossiper) ProcessMessageQueue() {
                 gossip_packet.Private = &message.PrivateMessage{}
                 gossip_packet.Private.Origin = gossiper.Name
                 gossip_packet.Private.ID = 0
-                gossip_packet.Private.Text = client_msg
+                gossip_packet.Private.Text = security.EncryptMessage(client_msg, destination)
                 gossip_packet.Private.Destination = destination
                 gossip_packet.Private.HopLimit = HOPLIMIT
                 relay_addr = "N/A"
@@ -1246,10 +1246,12 @@ func (gossiper *Gossiper) GossipPrivateMessages() {
         // relay_addr := channel_packet.Relay_addr
         packet  := channel_packet.Packet.Private
         if packet.Destination == gossiper.Name {
-            WebServerSendChannel<-message.ClientMessage{Operation:"NewPrivateMessage", Message:packet.Text, Origin:packet.Origin}
+            msg := security.DecryptMessage(packet.Text)
+            WebServerSendChannel<-message.ClientMessage{Operation:"NewPrivateMessage", Message:msg, Origin:packet.Origin}
             continue
         }
         if packet.Origin == gossiper.Name {
+            //msg := security.DecryptMessage(packet.Text)
             WebServerSendChannel<-message.ClientMessage{Operation:"NewPrivateMessage", Message:packet.Text, Destination:packet.Destination}
         }
         if packet.HopLimit <=0 {

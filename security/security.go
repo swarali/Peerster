@@ -2,8 +2,11 @@ package security
 
 import (
      "bytes"
+     "encoding/base64"
 //     "errors"
+     "fmt"
      "io"
+     "io/ioutil"
      "log"
      "os"
      "path/filepath"
@@ -18,6 +21,7 @@ import (
      "github.com/Swarali/Peerster/message"
      "golang.org/x/crypto/openpgp"
      "golang.org/x/crypto/openpgp/armor"
+//     "golang.org/x/crypto/openpgp/keys"
      "golang.org/x/crypto/openpgp/packet"
 )
 
@@ -27,7 +31,7 @@ var PUBLIC_KEY_TEXT string
 var SEC_ENTITY *openpgp.Entity
 var TRUSTED_PUBLIC_KEYS map[string]string
 
-func createEntityFromKeys(pubKey *packet.PublicKey, privKey *packet.PrivateKey) *openpgp.Entity {
+func createEntityFromKeys(name string, pubKey *packet.PublicKey, privKey *packet.PrivateKey) *openpgp.Entity {
 	config := packet.Config{
 		DefaultHash:            crypto.SHA256,
 		DefaultCipher:          packet.CipherAES256,
@@ -55,6 +59,7 @@ func createEntityFromKeys(pubKey *packet.PublicKey, privKey *packet.PrivateKey) 
 			SigType:      packet.SigTypePositiveCert,
 			PubKeyAlgo:   packet.PubKeyAlgoRSA,
 			Hash:         config.Hash(),
+			PreferredHash:             []uint8{8}, // SHA-256
 			IsPrimaryId:  &isPrimaryId,
 			FlagsValid:   true,
 			FlagSign:     true,
@@ -62,6 +67,7 @@ func createEntityFromKeys(pubKey *packet.PublicKey, privKey *packet.PrivateKey) 
 			IssuerKeyId:  &e.PrimaryKey.KeyId,
 		},
 	}
+    //e.Identities[uid.Id].SelfSignature.SignUserId(e.Identities[uid.Id].UserId.Id, e.PrimaryKey, e.PrivateKey, nil)
 
 	keyLifetimeSecs := uint32(86400 * 365)
 
@@ -178,7 +184,7 @@ func InitKeys(directory string, peer_id string) {
 	defer pri_in.Close()
 	privKey := decodePrivateKey(pri_in)
 
-	SEC_ENTITY = createEntityFromKeys(pubKey, privKey)
+	SEC_ENTITY = createEntityFromKeys(peer_id, pubKey, privKey)
 
     // Read Public key
     readPublicKey()
@@ -226,7 +232,6 @@ func SignPacket(packet *message.GossipPacket) string {
     }
 
     return buf.String()
-
 }
 
 func VerifyPacket(packet *message.GossipPacket) bool {
@@ -260,3 +265,77 @@ func AddorUpdatePublicKey(peer string, public_key string) {
     log.Println("Trusted public keys are", TRUSTED_PUBLIC_KEYS)
 }
 
+func EncryptMessage(msg string, peer string) string {
+    public_key, public_key_exists := TRUSTED_PUBLIC_KEYS[peer]
+    if !public_key_exists {
+        log.Println("Public key for", peer, "does not exist")
+    }
+    keyringBuffer := strings.NewReader(public_key)
+    pubKey := decodePublicKey(keyringBuffer)
+	temp_entity := createEntityFromKeys(peer, pubKey, nil)
+    // encrypt string
+    encbuf := new(bytes.Buffer)
+    buf := encbuf
+    //buf, err := armor.Encode(encbuf, "PGP MESSAGE", nil)
+    //if err != nil {
+    //    log.Println(err)
+    //}
+	config := packet.Config{
+		DefaultHash:            crypto.SHA256,
+		DefaultCipher:          packet.CipherAES256,
+		DefaultCompressionAlgo: packet.CompressionZLIB,
+		CompressionConfig: &packet.CompressionConfig{
+			Level: 9,
+		},
+		RSABits: 4096,
+	}
+    w, err := openpgp.Encrypt(buf, []*openpgp.Entity{temp_entity}, nil, nil, &config)
+    if err != nil {
+        log.Println("Error while encryption", err)
+    }
+
+    _, err = w.Write([]byte(msg))
+    if err != nil {
+        log.Println("Error while writing message", err)
+    }
+    w.Close()
+    str := base64.StdEncoding.EncodeToString([]byte(encbuf.String()))
+    fmt.Println("Encrypted message is", str)
+    return str
+}
+
+func DecryptMessage(encrypted_msg string) string {
+
+    data, err := base64.StdEncoding.DecodeString(encrypted_msg)
+    buf := bytes.NewBuffer(data)
+    //decbuf, err := armor.Decode(buf)
+    //if err != nil {
+    //    fmt.Println(err)
+    //}
+    // Open the private key file
+    keyringFileBuffer, _ := os.Open(PRIVATE_KEY_FILE)
+    defer keyringFileBuffer.Close()
+    entityList := openpgp.EntityList{SEC_ENTITY}
+    //entityList.append(&SEC_ENTITY)
+    //entityList  := []*openpgp.Entity{SEC_ENTITY}
+    //entityList, err := openpgp.ReadArmoredKeyRing(keyringFileBuffer)
+    //if err != nil {
+    //    fmt.Println(err)
+    //}
+
+	config := packet.Config{
+		DefaultHash:            crypto.SHA256,
+		DefaultCipher:          packet.CipherAES256,
+		DefaultCompressionAlgo: packet.CompressionZLIB,
+		CompressionConfig: &packet.CompressionConfig{
+			Level: 9,
+		},
+		RSABits: 4096,
+	}
+    md, err := openpgp.ReadMessage(buf, entityList, nil, &config)
+    if err != nil {
+        log.Println("Error reading the file", err)
+    }
+    decrypted_msg, _:= ioutil.ReadAll(md.UnverifiedBody)
+    return string(decrypted_msg)
+}
