@@ -77,9 +77,7 @@ func fileHandler(w http.ResponseWriter, r *http.Request) {
 		size_file, open_err := os.Open(size_path)
 		size_info, stat_err := size_file.Stat()
 		if open_err!= nil || stat_err != nil {
-			fmt.Println("Error while accessing", size_path, open_err, stat_err)
-			log.Println("Error while accessing", size_path, open_err, stat_err)
-
+			// There is not a size file
 			real_size = int64(0)
 		} else {
 			size_file_size := size_info.Size()

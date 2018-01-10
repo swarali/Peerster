@@ -535,8 +535,8 @@ func createSizeFile(file_name string, size int64) {
 	file, err := os.Create(file_path)
 
 	if err != nil {
-		fmt.Println("Unable to create metafile", file_path)
-		log.Println("Unable to create metafile", file_path)
+		fmt.Println("Unable to create sizefile", file_path)
+		log.Println("Unable to create sizefile", file_path)
 		return
 	}
 
