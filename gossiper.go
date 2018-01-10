@@ -559,13 +559,14 @@ func GetLastHash(reply *message.DataReply, file_name string, file_hash []byte, i
 		log.Println("Unable to create metafile", metafile_path)
 		return nil, ""
 	}
-	metafile.Write(reply.Data)
+    decryptedData := []byte(security.DecryptMessage(string(reply.Data)))
+	metafile.Write(decryptedData)
 	metafile.Close()
 
-	f_metafile.Write(reply.Data)
+	f_metafile.Write(decryptedData)
 
 	new_hash := make([]byte, 32)
-	copy(new_hash, reply.Data[len(reply.Data) - 32 : len(reply.Data)])
+	copy(new_hash, decryptedData[len(decryptedData) - 32 : len(decryptedData)])
 	o := sha256.New()
 	o.Write(new_hash)
 	new_hash = o.Sum(nil)
@@ -690,7 +691,10 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
         //Send Request.
         possible_destinations:= make([]string, 0)
         for dest := range chunk.Sources {
-        	possible_destinations = append(possible_destinations, dest)
+            _, is_trusted := security.TRUSTED_PUBLIC_KEYS[dest]
+            if is_trusted {
+                possible_destinations = append(possible_destinations, dest)
+            }
 		}
         reply := gossiper.GetReply(chunk_request, possible_destinations)
         fmt.Println("Downloading", file_name, "chunk", chunk_no+1, "from", reply.Origin)
@@ -700,8 +704,9 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
             log.Println("File Name or Hash Value does not match for", file_name)
             continue
         }
+        decryptedData := []byte(security.DecryptMessage(string(reply.Data)))
         chunk_hash := sha256.New()
-        chunk_hash.Write(reply.Data)
+        chunk_hash.Write(decryptedData)
         if hex.EncodeToString(chunk_hash_req) != hex.EncodeToString(chunk_hash.Sum(nil)) {
             fmt.Println("Hash of the data does not match Hash Value for", file_name)
             log.Println("Hash of the data does not match Hash Value for", file_name)
@@ -714,11 +719,11 @@ func (gossiper *Gossiper) DownloadChunks(file_name string) {
             log.Println("Unable to create chunkfile", chunk_path)
             return
         }
-        chunkfile.Write(reply.Data)
+        chunkfile.Write(decryptedData)
         chunkfile.Close()
 
-        file.Write(reply.Data)
-        file_size+=int64(len(reply.Data))
+        file.Write(decryptedData)
+        file_size+=int64(len(decryptedData))
         gossiper.UploadedFiles[file_name].FileSize = file_size
     }
     createSizeFile(file_name, file_size)
@@ -1482,7 +1487,8 @@ func (gossiper *Gossiper) SendReply(destination string, file_name string, chunk_
     defer file.Close()
     data := make([]byte, file_size)
     file.Read(data)
-    chunk_reply.Data = data
+    encryptedData := []byte(security.EncryptMessage(string(data), destination))
+    chunk_reply.Data = encryptedData
     chunk_reply.HashValue = hash
 
     log.Println("Replying to the request for", hash,
