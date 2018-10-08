@@ -1,11 +1,24 @@
-# Machine Learning Project II
+# Peerster: File Streaming Between Trusted Peers
+By Ariel Alba, Swarali Karkhanis
 
-In recent years, decentralized systems, especially peer-to-peer systems have gained immense popularity in the sphere of content distribution. 
-Concepts like Streaming, File Sharing, Cloud storage, Cloud computing, are not taboo concepts for people anymore. 
-Those services are changing the way we live and creating new necessities to fulfill. 
-Its advantages like speed, scalability, dynamic node additions/deletions make it a very attractive choice for file distribution over the traditional client-server model.
-The evolution of systems from the age of Napster to BitTorrent, Gnutella is the testimony to the fact that the internet sytems are moving towards P2P file sharing approach.
-This can also be seen in the rise of several serverless CDN solutions that try to leverage technologies like WebRTC for peer communication. 
+This project proposes Peerster, a P2P secure file streaming system developed as a part of Decentralised Systems Engineering in Autumn'17. Peerster system allows nodes to stream data securely from its trusted peers in an unsecure environment. The properties of the system are as follows:
+- Security
+  - Confidentiality: Through trusted relays 
+  - Authentication: Through packet signatures
+  - Integrity: Through packet signatures and metadata hashing
+
+- Streaming
+  - Chunking and Hashing of Metadata file
+  - Encoding and Chunking of Video files
+
+The high-level design of Peerster is as follows:
+- A new node on the network shares its public key across all the peers. Based on their own preferance every node decides whether or not to trust a node.
+- Nodes share the file metadata on the network by using gossiping and anti-entropy protocols.
+- A node can issue a search request (using key-words) and receive files(matching the keyword) and list of nodes from which files can be downloaded.
+- A node can issue a download request (using metadata hash) on trusted nodes by requesting on chunks of data from different nodes on the network. A node need not have the entire file only few chunks are enough.
+- A node replies to the download request only if it trusts the requesting node. To maintain integrity and confidentiality, we use PGP encryption/decryption for all data/metadata related communications.
+
+We have also included a web interface that supports viewing of the streamed video files.
 
 ## Prerequisites
 
